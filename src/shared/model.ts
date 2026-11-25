@@ -415,7 +415,18 @@ export type PrEvent =
   /** A background quick action started, printed something or finished. */
   | { type: 'action'; key: string; run: ActionRun }
   /** The PR's agent conversation changed (a turn started, streamed, ended). */
-  | { type: 'agent'; key: string; session: AgentSession };
+  | { type: 'agent'; key: string; session: AgentSession }
+  /** An agent asked to show the user something in the PR's tab (the show_in_app and search_code MCP tools). */
+  | { type: 'reveal'; key: string; target: RevealTarget };
+
+/** What an agent can bring into view in a PR's tab. */
+export type RevealTarget =
+  /** A file: its diff in All changes, or its own tab at `line` (of the PR head) when given. */
+  | { kind: 'file'; path: string; line: number | null; changed: boolean }
+  | { kind: 'thread'; path: string; threadId: string }
+  | { kind: 'draft'; path: string; draftId: string }
+  /** Find in files, with this search. */
+  | { kind: 'search'; query: CodeSearchQuery };
 
 export interface SubmitInput {
   event: ReviewEvent;
@@ -540,10 +551,13 @@ export interface AgentConnector {
   model: string;
 }
 
-/** A request from the app to a PR's agent: free text, about some lines, or a whole review. */
+/**
+ * A request from the app to a PR's agent: free text, about some lines, or a whole review; or `restore`, the app's own
+ * request that rebuilds a deleted session from the conversation it kept (see `AgentSession.restoreHistory`).
+ */
 export interface AgentRequest {
-  kind: 'prompt' | 'lines' | 'review';
-  /** What you typed (empty for a review). */
+  kind: 'prompt' | 'lines' | 'review' | 'restore';
+  /** What you typed (empty for a review or a restore). */
   prompt: string;
   /** `lines` only: where "+" was clicked. */
   target: { path: string; side: DiffSide; startLine: number; endLine: number } | null;
@@ -587,6 +601,11 @@ export interface AgentSession {
    * branched: Claude Desktop and the app take turns on this one session, which keeps one Desktop session per PR.
    */
   started: boolean;
+  /**
+   * The previous session was deleted (in Claude Desktop, say): the next new session starts with a recap of the
+   * questions and answers kept here, so Claude continues with the same context.
+   */
+  restoreHistory?: boolean;
   turns: AgentTurn[];
 }
 

@@ -290,3 +290,24 @@ test('asking Claude about a line: the line gets a marker, the answer is in the A
   const saved = await win.evaluate(() => (globalThis as unknown as { api: Api }).api.agentSession('github.com/acme/demo#1'));
   expect(saved?.turns.find((t) => t.request.kind === 'lines')?.markerHidden).toBe(true);
 });
+
+test('an agent acts in the app over MCP: marks a file viewed, shows a thread and opens a search', async () => {
+  const client = new Client({ name: 'e2e', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } } }));
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const res = (await client.callTool({ name, arguments: { pr: 'acme/demo#1', ...args } })) as { isError?: boolean; content: { text: string }[] };
+    expect(res.isError, res.content[0]?.text).toBeFalsy();
+  };
+
+  await call('set_viewed', { paths: ['src/calc.ts'] });
+  await expect(win.getByRole('checkbox', { name: 'Mark src/calc.ts as viewed' })).toBeChecked({ timeout: 20_000 });
+  expect(received.find((r) => r.query.includes('markFileAsViewed('))?.vars).toMatchObject({ prId: 'PR_1', path: 'src/calc.ts' });
+
+  await win.getByRole('button', { name: /^Overview/ }).click();
+  await call('show_in_app', { thread_id: 'T_outdated' });
+  await expect(win.locator('[id="thread-T_outdated"]')).toBeInViewport({ timeout: 20_000 });
+
+  await call('search_code', { query: 'loyalty', show: true });
+  await expect(win.getByRole('textbox', { name: 'Search', exact: true })).toHaveValue('loyalty');
+  await client.close();
+});

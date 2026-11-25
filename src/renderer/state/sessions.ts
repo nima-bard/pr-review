@@ -21,6 +21,8 @@ export const useSessions = create<SessionsState>(() => ({ snapshots: {}, preview
 
 export function startSessionEvents(): () => void {
   return api.onPrEvent((event) => {
+    // Not state: `startRevealEvents` acts on it.
+    if (event.type === 'reveal') return;
     if (event.type === 'snapshot') rememberSnapshot(event.snapshot);
     useSessions.setState((s) => {
       if (event.type === 'snapshot') {

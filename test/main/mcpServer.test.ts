@@ -21,6 +21,10 @@ const bridge: ChannelBridge = {
     throw new Error('unused');
   },
   deleteDraft: async () => undefined,
+  setViewed: async () => undefined,
+  searchCode: async () => ({ files: [], total: 0, truncated: false, error: null }),
+  allFiles: async () => [],
+  reveal: () => undefined,
   agentReply: async (pr, turnId, text) => void replies.push(`${pr} ${turnId} ${text}`),
 };
 

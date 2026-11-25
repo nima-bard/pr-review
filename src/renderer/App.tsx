@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { api } from './api';
 import { TabBar } from './components/TabBar';
 import { refreshInbox } from './state/inbox';
+import { startRevealEvents } from './state/reveal';
 import { checkSoon, startSessionEvents, useSessions } from './state/sessions';
 import { loadQuickActions, prActions, runQuickAction } from './state/quickActions';
 import { loadAgents } from './state/agents';
@@ -35,6 +36,7 @@ export function App() {
 
   useEffect(() => {
     const stopEvents = startSessionEvents();
+    const stopReveals = startRevealEvents();
     void loadAppSettings();
     const onFocus = () => {
       void loadAppSettings();
@@ -99,6 +101,7 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => {
       stopEvents();
+      stopReveals();
       stopMenu();
       stopOpen();
       clearInterval(inboxTimer);

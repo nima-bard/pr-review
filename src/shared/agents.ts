@@ -1,4 +1,4 @@
-import type { AgentConnector, AgentRequest, PrSnapshot } from './model';
+import type { AgentConnector, AgentRequest, AgentTurn, PrSnapshot } from './model';
 
 /** Settings › Agents presets; Claude Code is the default. */
 export const AGENT_PRESETS: Omit<AgentConnector, 'id'>[] = [
@@ -49,6 +49,7 @@ export interface LineContext {
  */
 export function requestLabel(request: AgentRequest, { fileName = false } = {}): string {
   if (request.kind === 'review') return 'Review the pull request';
+  if (request.kind === 'restore') return 'Restore the conversation';
   if (request.kind === 'lines' && request.target) {
     const t = request.target;
     const lines = t.startLine === t.endLine ? `${t.endLine}` : `${t.startLine}–${t.endLine}`;
@@ -59,13 +60,15 @@ export function requestLabel(request: AgentRequest, { fileName = false } = {}): 
 }
 
 /**
- * What to do with a request about the code, said the same way every time: a question gets an answer and nothing else;
- * only a request for a comment or a change becomes a review comment. `where` names the lines for add_draft.
+ * What to do with a request, said the same way every time: a question gets an answer and nothing else; a request to do
+ * something in PR Review uses its tools; only a request for a comment or a change becomes a review comment. `where`
+ * names the lines for add_draft.
  */
 function answerOrComment(where: string | null): string {
   return [
-    'How to respond: decide from the request above whether it asks a question or asks for a review comment.',
+    'How to respond: decide from the request above whether it asks a question, asks you to do something in PR Review, or asks for a review comment.',
     '- A question, or a request to check, investigate or explain something: answer it in your reply only. Do not add a review comment, even if you find a problem: describe it in the answer, and the user can ask for a comment.',
+    '- A request to do something in PR Review (mark files as viewed, show or find a file, a line, a comment or where something is): do it with the pr-review tools (set_viewed, show_in_app, search_code with show), then say in one line what you did. get_pr lists the files, which are viewed, and the review threads.',
     `- A request for a comment, or for a change to the code or its wording (rephrase, rename, fix, suggest…): add exactly one review comment with the pr-review tool add_draft${where ? ` (${where})` : ''}, and say in your reply what it says.`,
   ].join('\n');
 }
@@ -77,6 +80,12 @@ function answerOrComment(where: string | null): string {
 export function agentPrompt(snapshot: PrSnapshot, request: AgentRequest, context: LineContext | null = null): string {
   const { key, details, worktree } = snapshot;
   const rules = `Don't post anything to GitHub: review comments go to the user's review as drafts, with the pr-review tool add_draft (pr "${key}").`;
+  if (request.kind === 'restore') {
+    return [
+      `This session continues the conversation about pull request ${details.url} (PR Review key "${key}"), checked out at ${worktree.path}.`,
+      'Reply with one short sentence saying you’re ready to continue. Do nothing else: no tools, no review comments.',
+    ].join('\n');
+  }
   if (request.kind === 'review') {
     return [
       `Review pull request ${details.url} with the code-review skill. You are working inside PR Review.`,
@@ -102,4 +111,38 @@ export function agentPrompt(snapshot: PrSnapshot, request: AgentRequest, context
     ].join('\n');
   }
   return [`${request.prompt.trim()}`, '', `Context: pull request ${details.url} (PR Review key "${key}"), checked out at ${worktree.path}.`, '', answerOrComment(null), rules].join('\n');
+}
+
+/** How much of the earlier conversation a recap carries: the newest questions and answers that fit. */
+const RECAP_LIMIT = 16_000;
+const RECAP_ANSWER_LIMIT = 2_000;
+
+/**
+ * The earlier conversation, for a new session that replaces a deleted one: each finished question and its answer,
+ * newest kept when it's long. Claude Code's own transcript can't be rebuilt, but this gives the new session the same
+ * context. Null when there's nothing to recap.
+ */
+export function conversationRecap(turns: readonly AgentTurn[]): string | null {
+  const entries: string[] = [];
+  for (const t of turns) {
+    if (t.status !== 'done' || t.request.kind === 'restore' || !t.reply.trim()) continue;
+    const asked = t.request.kind === 'lines' ? `${t.request.prompt.trim()} (about ${requestLabel(t.request)})` : t.request.prompt.trim() || requestLabel(t.request);
+    const answer = t.reply.trim().length > RECAP_ANSWER_LIMIT ? `${t.reply.trim().slice(0, RECAP_ANSWER_LIMIT)}…` : t.reply.trim();
+    entries.push(`Asked: ${asked}\nYou answered: ${answer}`);
+  }
+  const kept: string[] = [];
+  let size = 0;
+  for (const e of entries.reverse()) {
+    if (size + e.length > RECAP_LIMIT && kept.length > 0) break;
+    kept.unshift(e);
+    size += e.length;
+  }
+  if (kept.length === 0) return null;
+  return [
+    'The session that held this conversation was deleted. PR Review kept what was asked and answered; here it is, oldest first:',
+    '',
+    kept.join('\n\n'),
+    '',
+    'End of the earlier conversation.',
+  ].join('\n');
 }

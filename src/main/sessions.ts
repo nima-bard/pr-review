@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pollDeviceToken, startDeviceFlow } from '../core/github/deviceFlow';
 import { TokenStore } from './tokenStore';
 import type { Api, InvokeMethods, ContextMenuItem } from '../shared/ipc';
-import { prKey, repoSlug, type AgentConnector, type AgentRequest, type Draft, type DraftOrigin, type FileDiffModel, type McpStatus, type PrSnapshot, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type StaleWorktree, type WorktreeInfo } from '../shared/model';
+import { prKey, repoSlug, type AgentConnector, type AgentRequest, type CodeSearchQuery, type CodeSearchResult, type Draft, type DraftOrigin, type FileDiffModel, type McpStatus, type PrSnapshot, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type RevealTarget, type StaleWorktree, type WorktreeInfo } from '../shared/model';
 import { parsePrInput } from '../shared/prInput';
 import { GhTokenProvider } from '../core/github/auth';
 import { endpointsFor, GitHubClient } from '../core/github/client';
@@ -25,11 +25,12 @@ import { findTool } from '../core/env';
 import { startMcpServer, type ChannelBridge, type RunningMcpServer } from './mcpServer';
 import { McpTokenStore } from './mcpToken';
 import { agentPrompt, type LineContext } from '../shared/agents';
-import { AgentRunner } from './agents/agentRunner';
+import { AgentRunner, SESSION_GONE } from './agents/agentRunner';
 import { claudeCode } from './agents/claudeCode';
 import { claudeTerminal } from './agents/claudeTerminal';
 import { commandConnector } from './agents/command';
 import { claudeBin, runWithTerminal, type Connector } from './agents/connector';
+import { openSession, showInDesktop } from './agents/claudeSessions';
 
 export interface RegistryHost {
   userDataDir: string;
@@ -54,6 +55,8 @@ export interface RegistryHost {
   notify(title: string, body: string, url: string): void;
   /** Puts text on the clipboard (for secrets the page mustn't see). */
   copyText(text: string): void;
+  /** Brings the window showing PR `key` to the front (its own window, or the main one). */
+  showPr(key: string): void;
 }
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -168,13 +171,33 @@ export class SessionRegistry implements ChannelBridge {
    */
   private async openAgentInDesktop(key: string): Promise<void> {
     const cwd = this.session(key).current?.worktree.path;
-    const id = await this.agents.desktopSession(key);
+    const detail = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
+    /** Opens the session; false when Claude Code says it no longer exists. */
+    const open = async (): Promise<boolean> => {
+      const id = await this.agents.desktopSession(key);
+      // Already open somewhere: Claude Code won't open it twice. In Desktop, switch to it there.
+      const holder = await openSession(id);
+      if (holder?.desktopId) {
+        await showInDesktop(holder.desktopId);
+        return true;
+      }
+      if (holder) throw new Error('This pull request’s Claude session is open in Claude Code in a terminal. Run /desktop there to move it to Claude Desktop, or close it there and try again.');
+      try {
+        await runWithTerminal(claudeBin(), ['--desktop', '--resume', id], cwd);
+        return true;
+      } catch (err) {
+        if (SESSION_GONE.test(detail(err))) return false;
+        throw new Error(`Could not open the session in Claude Desktop: ${detail(err)}. It needs Claude Code 2.1.285 or later and a subscription sign-in.`);
+      }
+    };
+    if (await open()) return;
+    // Deleted in Claude Desktop (or its files removed): rebuild it from the conversation the app kept, then open that.
     try {
-      await runWithTerminal(claudeBin(), ['--desktop', '--resume', id], cwd);
+      await this.agents.restore(key);
     } catch (err) {
-      const detail = (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
-      throw new Error(`Could not open the session in Claude Desktop: ${detail}. It needs Claude Code 2.1.285 or later and a subscription sign-in.`);
+      throw new Error(`This pull request’s Claude session was deleted, and PR Review couldn’t start a new one with the conversation: ${detail(err)}. Your next request tries again.`);
     }
+    if (!(await open())) throw new Error('Claude Desktop can’t find this pull request’s new Claude session either. Ask something here, then try again.');
   }
 
   private async mcpStatus(): Promise<McpStatus> {
@@ -229,6 +252,24 @@ export class SessionRegistry implements ChannelBridge {
 
   deleteDraft(pr: string, id: string): Promise<void> {
     return this.bridgeSession(pr).deleteDraft(id);
+  }
+
+  setViewed(pr: string, paths: string[], viewed: boolean): Promise<void> {
+    return this.bridgeSession(pr).setViewed(paths, viewed);
+  }
+
+  searchCode(pr: string, query: CodeSearchQuery): Promise<CodeSearchResult> {
+    return this.bridgeSession(pr).searchCode(query);
+  }
+
+  allFiles(pr: string): Promise<string[]> {
+    return this.bridgeSession(pr).listAllFiles();
+  }
+
+  reveal(pr: string, target: RevealTarget): void {
+    const { key } = this.bridgeSession(pr);
+    this.host.emit({ type: 'reveal', key, target });
+    this.host.showPr(key);
   }
 
   /** Stops the background quick actions and agent requests (the app is quitting). */

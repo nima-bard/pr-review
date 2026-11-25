@@ -23,7 +23,7 @@ function applyAppTheme(id: string): void {
 if (process.env.PR_REVIEW_USER_DATA) app.setPath('userData', process.env.PR_REVIEW_USER_DATA);
 
 /** Pop-out windows show one PR; links always go to the main window. */
-const popOuts = new WeakSet<BrowserWindow>();
+const popOuts = new WeakMap<BrowserWindow, string>();
 /** PR links (prreview://) that arrived before a window's page was listening, e.g. the link that launched the app. */
 const pendingLinks: string[] = [];
 /** Pages that asked for pending links, so they are listening for new ones too. */
@@ -94,7 +94,7 @@ function createWindow(popOutKey?: string): BrowserWindow {
   });
   // Automated runs (PR_REVIEW_HIDDEN_WINDOWS) keep their windows off screen instead of popping up over yours.
   if (!process.env.PR_REVIEW_HIDDEN_WINDOWS) win.once('ready-to-show', () => win.show());
-  if (popOutKey) popOuts.add(win);
+  if (popOutKey) popOuts.set(win, popOutKey);
   const id = win.webContents.id;
   // A reload or a closed window stops listening until its page asks again.
   win.webContents.on('did-navigate', () => linkReady.delete(id));
@@ -277,6 +277,10 @@ void app.whenReady().then(async () => {
       return response === 0;
     },
     copyText: (text) => clipboard.writeText(text),
+    showPr: (key) => {
+      const win = BrowserWindow.getAllWindows().find((w) => popOuts.get(w) === key) ?? mainWindow();
+      if (win) bringToFront(win);
+    },
     notify: (title, body, url) => {
       // In the app, the status bar shows it.
       if (BrowserWindow.getFocusedWindow() || !Notification.isSupported()) return;

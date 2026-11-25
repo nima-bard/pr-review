@@ -4,7 +4,7 @@ import { EMPTY_STREAM, parseClaudeLine } from '../../core/agents/claudeStream';
 import { sessionTitle } from '../../shared/agents';
 import { claudeBin, killGroup, type Connector } from './connector';
 
-/** What a review may use without asking: reading the code and the PR, and PR Review's draft tools. */
+/** What a request may use without asking: reading the code and the PR, and PR Review's tools (drafts, Viewed, showing). */
 export const REVIEW_ALLOWED = [
   'Read',
   'Grep',

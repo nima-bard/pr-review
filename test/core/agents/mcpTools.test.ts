@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it } from 'vitest';
 import { ranges, registerReviewTools } from '../../../src/core/agents/mcpTools';
 import type { AgentDraftInput, ReviewBridge } from '../../../src/core/agents/reviewBridge';
-import type { Draft, DraftOrigin, FileDiffModel, PrSnapshot } from '../../../src/shared/model';
+import type { CodeSearchQuery, Draft, DraftOrigin, FileDiffModel, PrSnapshot, RevealTarget } from '../../../src/shared/model';
 
 const draft = (id: string, origin?: DraftOrigin): Draft => ({
   id,
@@ -23,7 +23,17 @@ function fakeBridge() {
   // 'mine': yours (written, or an agent's that you edited, which drops its origin); 'claude': an agent's, untouched.
   const drafts: Draft[] = [draft('mine'), draft('claude', { agent: 'Claude', turnId: 't' })];
   const added: { input: AgentDraftInput; origin: DraftOrigin }[] = [];
-  const snap = { key: 'github.com/o/r#1', details: { url: 'https://github.com/o/r/pull/1', title: 'T' }, worktree: { path: '/wt' }, drafts } as unknown as PrSnapshot;
+  const viewed: { paths: string[]; viewed: boolean }[] = [];
+  const reveals: RevealTarget[] = [];
+  const searches: CodeSearchQuery[] = [];
+  const snap = {
+    key: 'github.com/o/r#1',
+    details: { url: 'https://github.com/o/r/pull/1', title: 'T' },
+    worktree: { path: '/wt' },
+    files: [{ path: 'src/a.ts' }, { path: 'db/orders.kusto' }],
+    threads: [{ id: 'thread-1', path: 'src/a.ts' }],
+    drafts,
+  } as unknown as PrSnapshot;
   const diff: FileDiffModel = { path: 'src/a.ts', oldPath: 'src/a.ts', change: 'modified', patch: '@@', binary: false, commentable: { RIGHT: [1, 2, 3, 4, 5, 9], LEFT: [2] } };
   const bridge: ReviewBridge = {
     openPrs: () => [{ key: snap.key, url: snap.details.url, title: 'T', worktree: '/wt' }],
@@ -43,8 +53,15 @@ function fakeBridge() {
         1,
       );
     },
+    setViewed: async (_pr, paths, v) => void viewed.push({ paths, viewed: v }),
+    searchCode: async (_pr, query) => {
+      searches.push(query);
+      return query.pattern === '(' ? { files: [], total: 0, truncated: false, error: 'Invalid regular expression' } : { files: [{ path: 'src/a.ts', matches: [{ line: 2, text: 'run()', ranges: [[0, 3]] }] }], total: 1, truncated: false, error: null };
+    },
+    allFiles: async () => ['src/a.ts', 'db/orders.kusto', 'README.md'],
+    reveal: (_pr, target) => void reveals.push(target),
   };
-  return { bridge, added, drafts };
+  return { bridge, added, drafts, viewed, reveals, searches };
 }
 
 async function connect(bridge: ReviewBridge) {
@@ -64,9 +81,71 @@ async function connect(bridge: ReviewBridge) {
 const pr = 'github.com/o/r#1';
 
 describe('PR Review MCP tools', () => {
-  it('lists the seven tools', async () => {
+  it('lists the tools', async () => {
     const { client } = await connect(fakeBridge().bridge);
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(['add_draft', 'delete_draft', 'get_file_diff', 'get_pr', 'list_drafts', 'list_open_prs', 'update_draft']);
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([
+      'add_draft',
+      'delete_draft',
+      'get_file_diff',
+      'get_pr',
+      'list_drafts',
+      'list_open_prs',
+      'search_code',
+      'set_viewed',
+      'show_in_app',
+      'update_draft',
+    ]);
+  });
+
+  it('set_viewed ticks changed files, and refuses files the pull request does not change', async () => {
+    const { bridge, viewed } = fakeBridge();
+    const { call } = await connect(bridge);
+    expect(await call('set_viewed', { pr, paths: ['db/orders.kusto', 'db/orders.kusto'] })).toEqual({ isError: false, text: 'Marked 1 file as viewed: db/orders.kusto.' });
+    expect(await call('set_viewed', { pr, paths: ['src/a.ts'], viewed: false })).toMatchObject({ text: 'Marked 1 file as not viewed: src/a.ts.' });
+    expect(await call('set_viewed', { pr, paths: ['src/a.ts', 'README.md'] })).toEqual({ isError: true, text: expect.stringContaining('Not changed in this pull request: README.md.') });
+    expect(viewed).toEqual([
+      { paths: ['db/orders.kusto'], viewed: true },
+      { paths: ['src/a.ts'], viewed: false },
+    ]);
+  });
+
+  it('search_code returns the matches, and shows them in the app only when asked', async () => {
+    const { bridge, reveals, searches } = fakeBridge();
+    const { call } = await connect(bridge);
+    const found = JSON.parse((await call('search_code', { pr, query: 'run', include: '*.ts' })).text) as unknown;
+    expect(found).toEqual({ total: 1, truncated: false, files: [{ path: 'src/a.ts', matches: [{ line: 2, text: 'run()' }] }] });
+    expect(searches[0]).toEqual({ pattern: 'run', regex: false, matchCase: false, wholeWord: false, include: '*.ts', exclude: '', scope: 'changed' });
+    expect(reveals).toEqual([]);
+    await call('search_code', { pr, query: 'run', scope: 'all', show: true });
+    expect(reveals).toEqual([{ kind: 'search', query: expect.objectContaining({ pattern: 'run', scope: 'all' }) }]);
+    expect(await call('search_code', { pr, query: '(', regex: true, show: true })).toEqual({ isError: true, text: 'Invalid regular expression' });
+    expect(reveals).toHaveLength(1);
+  });
+
+  it('show_in_app shows a changed or unchanged file at a line, a thread or a draft', async () => {
+    const { bridge, reveals } = fakeBridge();
+    const { call } = await connect(bridge);
+    expect(await call('show_in_app', { pr, path: 'db/orders.kusto' })).toEqual({ isError: false, text: 'Showing db/orders.kusto in PR Review.' });
+    await call('show_in_app', { pr, path: './README.md', line: 4 });
+    await call('show_in_app', { pr, thread_id: 'thread-1' });
+    await call('show_in_app', { pr, draft_id: 'claude' });
+    expect(reveals).toEqual([
+      { kind: 'file', path: 'db/orders.kusto', line: null, changed: true },
+      { kind: 'file', path: 'README.md', line: 4, changed: false },
+      { kind: 'thread', path: 'src/a.ts', threadId: 'thread-1' },
+      { kind: 'draft', path: 'src/a.ts', draftId: 'claude' },
+    ]);
+  });
+
+  it('show_in_app needs exactly one thing to show, and one that exists', async () => {
+    const { bridge, reveals } = fakeBridge();
+    const { call } = await connect(bridge);
+    expect(await call('show_in_app', { pr })).toEqual({ isError: true, text: 'Give exactly one of path, thread_id or draft_id.' });
+    expect((await call('show_in_app', { pr, path: 'src/a.ts', thread_id: 'thread-1' })).isError).toBe(true);
+    expect(await call('show_in_app', { pr, thread_id: 'thread-1', line: 3 })).toEqual({ isError: true, text: 'line goes with path.' });
+    expect((await call('show_in_app', { pr, path: 'nope.ts' })).text).toContain("nope.ts isn't in the pull request’s head");
+    expect((await call('show_in_app', { pr, thread_id: 'x' })).isError).toBe(true);
+    expect(reveals).toEqual([]);
   });
 
   it('add_draft saves a draft on commentable lines, with the caller as its origin', async () => {

@@ -7,10 +7,15 @@
 - **Review with Claude** on a pull request runs your code review in a Claude Code session in the pull request's worktree. Its findings go into your review as drafts on the lines, marked "from Claude", not on GitHub: edit or delete them like your own, and Submit review sends them with yours. A draft you edit becomes yours, and agents can't change it any more.
 - **Ask about a line**: the comment editor has **Comment | Ask Claude** (or start with `/ask` or `/claude`). The question goes to Claude with the lines and the comments on them; the line gets a marker that opens the answer in the Agent panel, and a comment it writes goes into your review there. The marker's × removes it for good.
 - Drafts show as they'll read on GitHub: Markdown, with ```` ```suggestion```` blocks as a suggested change (the current lines and their replacement).
-- **One conversation per pull request**, in the **Agent panel** (⇧⌘A, or the Agent button): reviews, line questions and requests you type there, with what the agent did, its answer, the comments it added and what it cost; Stop ends one. **Open in Claude Desktop** opens the same session every time, named “PR #12 · title”.
+- **One conversation per pull request**, in the **Agent panel** (⇧⌘A, or the Agent button): reviews, line questions and requests you type there, with what the agent did, its answer, the comments it added and what it cost; Stop ends one. **Open in Claude Desktop** opens the same session every time, named “PR #12 · title”. If you delete that session in Claude Desktop, the next request (or Open in Claude Desktop) starts a new one with a recap of what was asked and answered, so Claude keeps the context.
 - **Ask while Claude is still answering**: a new request runs beside the one in progress, as a side branch of the conversation that knows everything said so far, so you don’t wait. Settings › Agents › **Requests at once** sets how many run per pull request (3 unless you change it).
 - **Not only Claude**: Settings › Agents lists the agents the app can ask: Claude Code in the app, Claude Code live in your terminal (channels, a research preview), or any command line such as Codex or Gemini CLI. The first one is the default; the Agent panel switches one pull request to another.
-- **An MCP server** in the app (127.0.0.1, with a token) lets any MCP client read the pull requests open in PR Review and add, change or delete its own draft comments. **Connect Claude Code** registers it for Claude Code and Claude Desktop's Code tab; **Copy settings** gives the configuration for other clients. Agents can't post, resolve or merge anything on GitHub.
+- **Ask Claude to do things in the app**: “mark all the Kusto files as viewed”, “show me where the new script is added”, “find where `retryPolicy` is used”. Claude ticks the Viewed checkboxes, opens the file at the line, a review thread or a draft, or opens Find in files with the search, and says what it did.
+- **An MCP server** in the app (127.0.0.1, with a token) lets any MCP client read the pull requests open in PR Review, add, change or delete its own draft comments, search the code, mark files as viewed and show things in the app. **Connect Claude Code** registers it for Claude Code and Claude Desktop's Code tab; **Copy settings** gives the configuration for other clients. Agents can't post, resolve or merge anything on GitHub.
+
+### Fixes
+
+- Going to a comment or line in a file you’d marked as viewed showed the folded file; it now unfolds it.
 
 ## 0.2.0
 

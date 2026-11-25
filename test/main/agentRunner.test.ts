@@ -15,7 +15,7 @@ function setup(parallel: number) {
   const dir = mkdtempSync(join(tmpdir(), 'prr-agents-'));
   dirs.push(dir);
   writeFileSync(join(dir, 'state.json'), JSON.stringify({ settings: { agents: [{ id: 'c', name: 'Claude', kind: 'claude-code', command: '', model: '' }], agentParallel: parallel } }));
-  const starts: { ctx: TurnContext; finish(): void }[] = [];
+  const starts: { ctx: TurnContext; finish(): void; fail(error: string): void }[] = [];
   const claude: Connector = {
     start(ctx, update) {
       let resolve!: (v: { sessionId: string | null }) => void;
@@ -23,8 +23,12 @@ function setup(parallel: number) {
       starts.push({
         ctx,
         finish: () => {
-          update({ status: 'done', reply: 'ok' });
+          update({ status: 'done', reply: `answer ${starts.length}` });
           resolve({ sessionId: ctx.fork ? 'forked-id' : ctx.sessionId });
+        },
+        fail: (error) => {
+          update({ status: 'failed', error });
+          resolve({ sessionId: null });
         },
       });
       return { stop: () => resolve({ sessionId: null }), done };
@@ -104,5 +108,56 @@ describe('AgentRunner', () => {
     // Only the side branch still runs: the session itself is free.
     await vi.waitFor(async () => expect(await runner.desktopSession(key)).toBe(starts[0]!.ctx.sessionId));
     starts[2]!.finish();
+  });
+
+  /** A runner whose PR session has one finished question, "first". */
+  async function withConversation() {
+    const setUp = setup(3);
+    await setUp.runner.ask(key, ask('first'));
+    await vi.waitFor(() => expect(setUp.starts).toHaveLength(1));
+    setUp.starts[0]!.finish();
+    await vi.waitFor(async () => expect((await setUp.runner.session(key))?.started).toBe(true));
+    return setUp;
+  }
+
+  it("runs a request again on a new session, with a recap, when the PR's session was deleted", async () => {
+    const { runner, starts } = await withConversation();
+    const oldId = starts[0]!.ctx.sessionId;
+    await runner.ask(key, ask('second'));
+    await vi.waitFor(() => expect(starts).toHaveLength(2));
+    starts[1]!.fail(`No conversation found with session ID: ${oldId}`);
+    await vi.waitFor(() => expect(starts).toHaveLength(3));
+    const retry = starts[2]!.ctx;
+    expect(retry).toMatchObject({ main: true, resume: false });
+    expect(retry.sessionId).not.toBe(oldId);
+    expect(retry.prompt).toContain('Asked: first\nYou answered: answer 1');
+    expect(retry.prompt.endsWith('\n\np')).toBe(true);
+    starts[2]!.finish();
+    await vi.waitFor(async () => expect((await runner.session(key))?.turns.map((t) => t.status)).toEqual(['done', 'done']));
+    expect(await runner.session(key)).toMatchObject({ sessionId: retry.sessionId, started: true, restoreHistory: false });
+  });
+
+  it('restores a deleted session for Claude Desktop: a short request on a new session that carries the recap', async () => {
+    const { runner, starts } = await withConversation();
+    const restoring = runner.restore(key);
+    await vi.waitFor(() => expect(starts).toHaveLength(2));
+    const ctx = starts[1]!.ctx;
+    expect(ctx).toMatchObject({ main: true, resume: false, request: { kind: 'restore' } });
+    expect(ctx.prompt).toContain('Asked: first');
+    starts[1]!.finish();
+    await restoring;
+    expect(await runner.desktopSession(key)).toBe(ctx.sessionId);
+  });
+
+  it('says why when the deleted session could not be restored', async () => {
+    const { runner, starts } = await withConversation();
+    const restoring = runner.restore(key);
+    await vi.waitFor(() => expect(starts).toHaveLength(2));
+    starts[1]!.fail('Not signed in');
+    await expect(restoring).rejects.toThrow('Not signed in');
+    // The next request still starts the new session with the recap.
+    await runner.ask(key, ask('again'));
+    await vi.waitFor(() => expect(starts).toHaveLength(3));
+    expect(starts[2]!.ctx.prompt).toContain('Asked: first');
   });
 });

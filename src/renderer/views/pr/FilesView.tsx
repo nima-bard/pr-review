@@ -155,7 +155,8 @@ function AllChanges({ snapshot }: { snapshot: PrSnapshot }) {
     const threadId = ui.focusThread;
     const elementId = ui.focusElement;
     if (!path) return;
-    if (ui.collapsed[path]) updateUi(snapshot.key, (u) => ({ collapsed: { ...u.collapsed, [path]: false } }));
+    // Unfolded, also when it's folded for being viewed (no entry yet), so the thread or line is there to show.
+    if (ui.collapsed[path] !== false) updateUi(snapshot.key, (u) => ({ collapsed: { ...u.collapsed, [path]: false } }));
     const content = list.current;
     const scroller = content?.closest<HTMLElement>('.overflow-y-auto') ?? null;
     // Sections load lazily as they near the viewport, and the target's own diff loads too, so heights keep changing

@@ -48,8 +48,9 @@ function prView(s: PrSnapshot) {
     head_sha: d.headRefOid,
     worktree: s.worktree.path,
     description: d.body,
-    files: s.files.map((f) => ({ path: f.path, old_path: f.oldPath, change: f.change, additions: f.additions, deletions: f.deletions })),
+    files: s.files.map((f) => ({ path: f.path, old_path: f.oldPath, change: f.change, additions: f.additions, deletions: f.deletions, viewed: f.viewed === 'VIEWED' })),
     threads: s.threads.map((t) => ({
+      id: t.id,
       path: t.path,
       side: t.side,
       line: t.anchor.line ?? null,
@@ -196,6 +197,102 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
         agentDraft(bridge, pr, id);
         await bridge.deleteDraft(pr, id);
         return text(`Deleted draft ${id}.`);
+      }),
+  );
+
+  registerActionTools(server, bridge);
+}
+
+/** "a, b, c and 4 more", to keep confirmations short. */
+const some = (items: readonly string[], max = 5) => (items.length > max ? `${items.slice(0, max).join(', ')} and ${items.length - max} more` : items.join(', '));
+
+/** The tools that act in the app for the user: Viewed checkboxes, searching the code, and showing things in the PR's tab. */
+function registerActionTools(server: McpServer, bridge: ReviewBridge): void {
+  server.registerTool(
+    'set_viewed',
+    {
+      title: 'Mark files as viewed',
+      description:
+        "Ticks (or unticks) the Viewed checkbox of changed files in PR Review, as the user would: viewed files fold away in the diff. Use it when the user asks to mark files as viewed; get_pr lists the files and which are viewed.",
+      inputSchema: { pr: PR, paths: z.array(z.string()).min(1).describe('Changed files, as get_pr lists them'), viewed: z.boolean().default(true) },
+    },
+    async ({ pr, paths, viewed }) =>
+      guarded(async () => {
+        const changed = new Set(bridge.snapshot(pr).files.map((f) => f.path));
+        const unknown = paths.filter((p) => !changed.has(p));
+        if (unknown.length > 0) return fail(`Not changed in this pull request: ${some(unknown)}. Only changed files have a Viewed checkbox (get_pr lists them).`);
+        const unique = [...new Set(paths)];
+        await bridge.setViewed(pr, unique, viewed);
+        return text(`Marked ${unique.length} file${unique.length === 1 ? '' : 's'} as ${viewed ? 'viewed' : 'not viewed'}: ${some(unique)}.`);
+      }),
+  );
+
+  server.registerTool(
+    'search_code',
+    {
+      title: 'Search the code',
+      description:
+        'Searches the pull request’s code in its worktree, like Find in files in PR Review: the changed files, or every file. With show, the results also open in PR Review’s Find in files, for when the user asks to find something.',
+      inputSchema: {
+        pr: PR,
+        query: z.string().min(1),
+        regex: z.boolean().default(false),
+        match_case: z.boolean().default(false),
+        whole_word: z.boolean().default(false),
+        include: z.string().default('').describe('Comma-separated globs of files to search, e.g. "*.kusto, src/"'),
+        exclude: z.string().default(''),
+        scope: z.enum(['changed', 'all']).default('changed').describe('changed: the files the pull request changes; all: every file'),
+        show: z.boolean().default(false).describe('Also show the results in PR Review'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ pr, query, regex, match_case, whole_word, include, exclude, scope, show }) =>
+      guarded(async () => {
+        const q = { pattern: query, regex, matchCase: match_case, wholeWord: whole_word, include, exclude, scope };
+        const result = await bridge.searchCode(pr, q);
+        if (result.error) return fail(result.error);
+        if (show) bridge.reveal(pr, { kind: 'search', query: q });
+        return json({ total: result.total, truncated: result.truncated, files: result.files.map((f) => ({ path: f.path, matches: f.matches.map((m) => ({ line: m.line, text: m.text })) })) });
+      }),
+  );
+
+  server.registerTool(
+    'show_in_app',
+    {
+      title: 'Show something in PR Review',
+      description:
+        'Brings a file (at a line, if given), a review thread or a draft comment into view in the pull request’s tab in PR Review. Use it when the user asks to show, open or find something; give exactly one of path, thread_id (from get_pr) or draft_id.',
+      inputSchema: {
+        pr: PR,
+        path: z.string().optional(),
+        line: z.number().int().positive().optional().describe('A line of the file in the pull request’s head, with path'),
+        thread_id: z.string().optional(),
+        draft_id: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ pr, path, line, thread_id, draft_id }) =>
+      guarded(async () => {
+        if ([path, thread_id, draft_id].filter((v) => v !== undefined).length !== 1) return fail('Give exactly one of path, thread_id or draft_id.');
+        if (line !== undefined && path === undefined) return fail('line goes with path.');
+        const snap = bridge.snapshot(pr);
+        if (thread_id !== undefined) {
+          const thread = snap.threads.find((t) => t.id === thread_id);
+          if (!thread) return fail(`There is no review thread ${thread_id} (get_pr lists them).`);
+          bridge.reveal(pr, { kind: 'thread', path: thread.path, threadId: thread.id });
+          return text(`Showing the thread on ${thread.path} in PR Review.`);
+        }
+        if (draft_id !== undefined) {
+          const draft = snap.drafts.find((d) => d.id === draft_id);
+          if (!draft) return fail(`There is no draft ${draft_id} (list_drafts shows them).`);
+          bridge.reveal(pr, { kind: 'draft', path: draft.path, draftId: draft.id });
+          return text(`Showing the draft on ${draft.path}:${draft.line} in PR Review.`);
+        }
+        const file = path!.replace(/^\.?\//, '');
+        const changed = snap.files.some((f) => f.path === file);
+        if (!changed && !(await bridge.allFiles(pr)).includes(file)) return fail(`${file} isn't in the pull request’s head. Paths are relative to the repository root.`);
+        bridge.reveal(pr, { kind: 'file', path: file, line: line ?? null, changed });
+        return text(`Showing ${file}${line ? `:${line}` : ''} in PR Review.`);
       }),
   );
 }

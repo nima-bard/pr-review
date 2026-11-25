@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { conversationRecap } from '../../shared/agents';
 import type { AgentConnector, AgentRequest, AgentSession, AgentTurn } from '../../shared/model';
 import type { AppState } from '../../core/store/appState';
 import type { Connector, RunningTurn, TurnUpdate } from './connector';
@@ -8,6 +9,9 @@ const SESSION_KINDS: readonly AgentConnector['kind'][] = ['claude-code', 'claude
 
 /** The most requests one pull request runs at once, whatever Settings says. */
 const MAX_PARALLEL = 8;
+
+/** What Claude Code says when a session it's asked to resume no longer exists (`claude -p`, `claude --desktop`). */
+export const SESSION_GONE = /No conversation found with session ID|No session found with ID/;
 
 export interface AgentRunnerDeps {
   appState: AppState;
@@ -36,6 +40,8 @@ interface PrAgent {
  */
 export class AgentRunner {
   private readonly prs = new Map<string, Promise<PrAgent>>();
+  /** Callers waiting for a request to end (`restore`), by turn id. */
+  private readonly waiters = new Map<string, { resolve(): void; reject(err: Error): void }>();
 
   constructor(private readonly deps: AgentRunnerDeps) {}
 
@@ -88,6 +94,12 @@ export class AgentRunner {
   /** Adds a request; it starts at once unless the PR already runs as many as Settings allows. */
   async ask(key: string, request: AgentRequest): Promise<void> {
     const pr = await this.agent(key);
+    await this.enqueue(pr, request);
+    this.publish(key, pr, true);
+    void this.pump(key, pr);
+  }
+
+  private async enqueue(pr: PrAgent, request: AgentRequest): Promise<AgentTurn> {
     const connector = await this.connectorOf(pr);
     const turn: AgentTurn = {
       id: randomUUID(),
@@ -104,8 +116,23 @@ export class AgentRunner {
       error: null,
     };
     pr.session.turns.push(turn);
+    return turn;
+  }
+
+  /**
+   * Rebuilds the PR's session after Claude Code said it no longer exists (deleted in Claude Desktop, say): a new one
+   * that starts with a recap of the conversation, made by a short request of its own. Resolves when Claude Desktop can
+   * open it; rejects with why when it couldn't be made, and the next request then tries again.
+   */
+  async restore(key: string): Promise<void> {
+    const pr = await this.agent(key);
+    if (pr.mainTurnId) throw new Error('Claude is still answering in this pull request’s session. Try again when it’s done.');
+    Object.assign(pr.session, { sessionId: randomUUID(), started: false, restoreHistory: true });
+    const turn = await this.enqueue(pr, { kind: 'restore', prompt: '', target: null });
+    const done = new Promise<void>((resolve, reject) => this.waiters.set(turn.id, { resolve, reject }));
     this.publish(key, pr, true);
     void this.pump(key, pr);
+    await done;
   }
 
   /**
@@ -139,12 +166,17 @@ export class AgentRunner {
     };
     let running: RunningTurn;
     let side = false;
+    /** The session this request resumes (or forks), if any: it may turn out to be deleted. */
+    let resumed: string | null = null;
     try {
       const connector = await this.connectorOf(pr);
       const [prepared, mcp] = await Promise.all([this.deps.prepare(key, turn.request), this.deps.mcp()]);
       const { session } = pr;
       // A side branch knows the conversation so far (a fork of the session), or starts fresh if there's none yet.
       side = !main && connector.kind === 'claude-code';
+      resumed = session.started ? session.sessionId : null;
+      // A new session replacing a deleted one starts with what was asked and answered before.
+      const recap = !session.started && session.restoreHistory ? conversationRecap(session.turns) : null;
       running = this.deps.connector(connector.kind).start(
         {
           turnId: turn.id,
@@ -152,6 +184,7 @@ export class AgentRunner {
           connector,
           request: turn.request,
           ...prepared,
+          prompt: recap ? `${recap}\n\n${prepared.prompt}` : prepared.prompt,
           sessionId: side && !session.started ? randomUUID() : session.sessionId,
           resume: session.started,
           fork: side && session.started,
@@ -163,6 +196,7 @@ export class AgentRunner {
     } catch (err) {
       release();
       Object.assign(turn, { status: 'failed', error: err instanceof Error ? err.message : String(err), endedAt: new Date().toISOString() });
+      this.settle(turn);
       this.publish(key, pr, true);
       void this.pump(key, pr);
       return;
@@ -175,14 +209,43 @@ export class AgentRunner {
     release();
     turn.endedAt = new Date().toISOString();
     const { session } = pr;
+    // The PR's session was deleted (in Claude Desktop, say): a new one starts with a recap of the conversation, and
+    // the request runs again there. Only once: the new session isn't resumed by its first request.
+    if (turn.status === 'failed' && resumed && SESSION_GONE.test(turn.error ?? '')) {
+      // Requests running beside this one fail the same way; the first of them replaces the session.
+      if (session.sessionId === resumed) Object.assign(session, { sessionId: randomUUID(), started: false, restoreHistory: true });
+      Object.assign(turn, {
+        status: 'queued',
+        error: null,
+        endedAt: null,
+        reply: '',
+        branch: false,
+        activity: ['Started a new Claude session with a recap of this conversation: the previous one had been deleted.'],
+      });
+      this.publish(key, pr, true);
+      void this.pump(key, pr);
+      return;
+    }
     // The PR's session exists once the agent reported it (even if the turn failed later) or the turn went through.
     if (!side && session.sessionId && (sessionId || turn.status === 'done' || turn.status === 'handed-off')) {
       // Claude Code may report another id (it continued in a copy): the PR's conversation goes on there.
       if (sessionId && sessionId !== session.sessionId) session.sessionId = sessionId;
       session.started = true;
+      // Its first message carried the recap.
+      session.restoreHistory = false;
     }
+    this.settle(turn);
     this.publish(key, pr, true);
     void this.pump(key, pr);
+  }
+
+  /** Tells whoever waits for `turn` (`restore`) how it ended. */
+  private settle(turn: AgentTurn): void {
+    const waiter = this.waiters.get(turn.id);
+    if (!waiter) return;
+    this.waiters.delete(turn.id);
+    if (turn.status === 'done') waiter.resolve();
+    else waiter.reject(new Error(turn.error ?? 'It was stopped.'));
   }
 
   async stop(key: string, turnId: string): Promise<void> {
@@ -196,6 +259,7 @@ export class AgentRunner {
     const turn = pr.session.turns.find((t) => t.id === turnId);
     if (turn?.status !== 'queued') return;
     Object.assign(turn, { status: 'stopped', endedAt: new Date().toISOString() });
+    this.settle(turn);
     this.publish(key, pr, true);
   }
 

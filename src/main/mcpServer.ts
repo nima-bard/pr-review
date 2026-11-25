@@ -61,9 +61,15 @@ interface Channel {
   turnId: string | null;
 }
 
+/** For every client: what the server is for, and how its tools fit together. */
+const INSTRUCTIONS =
+  'PR Review is the macOS app where the user reviews GitHub pull requests, each checked out in a worktree. These tools read the pull requests open in it and act there for the user: ' +
+  'review comments go into the user’s pending review as drafts (add_draft), never straight to GitHub; set_viewed ticks files’ Viewed checkboxes; show_in_app and search_code with show bring a file, line, thread, draft or search results into view. ' +
+  'Start with list_open_prs or get_pr. Show things only when the user asks to see or find them.';
+
 const CHANNEL_INSTRUCTIONS =
-  'PR Review sends requests about the pull request you are reviewing as <channel source="pr-review"> events. Act on each one as if the user typed it. ' +
-  'When a request has a turn_id, answer it briefly with the reply tool (the answer shows in PR Review), and add review comments with add_draft, never on GitHub.';
+  `${INSTRUCTIONS} PR Review sends requests about the pull request you are reviewing as <channel source="pr-review"> events. Act on each one as if the user typed it. ` +
+  'When a request has a turn_id, answer it briefly with the reply tool (the answer shows in PR Review).';
 
 /**
  * The PR Review MCP server on 127.0.0.1:`port`, over Streamable HTTP. Tool calls are stateless (drafts live in the app,
@@ -132,7 +138,7 @@ export function startMcpServer(bridge: ChannelBridge, port: number, token: strin
         .catch(failed);
       return;
     }
-    const mcp = new McpServer({ name: 'pr-review', version });
+    const mcp = new McpServer({ name: 'pr-review', version }, { instructions: INSTRUCTIONS });
     const from = caller(req);
     registerReviewTools(mcp, bridge, () => from);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
