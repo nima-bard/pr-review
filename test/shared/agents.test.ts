@@ -42,8 +42,9 @@ describe('agentPrompt', () => {
     }
   });
 
-  it('labels requests', () => {
+  it('labels requests, with only the file name for headers', () => {
     expect(requestLabel(lines)).toBe('src/a.ts:3–5');
+    expect(requestLabel(lines, { fileName: true })).toBe('a.ts:3–5');
     expect(requestLabel({ kind: 'review', prompt: '', target: null })).toBe('Review the pull request');
   });
 });

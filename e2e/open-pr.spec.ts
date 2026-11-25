@@ -250,7 +250,7 @@ test('an agent adds a draft over MCP: a suggestion until accepted, then submitte
   expect(outside.content[0]?.text).toContain('Commentable lines');
   await client.close();
 
-  await expect(win.getByText('Suggested by Codex · not in your review until you accept it')).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Suggested by Codex', { exact: true })).toBeVisible({ timeout: 20_000 });
   await win.getByRole('button', { name: /Submit review/ }).first().click();
   const dialog = win.getByRole('dialog', { name: 'Submit your review' });
   await expect(dialog).toContainText('Not in this review: 1 suggestion from Codex');
@@ -264,7 +264,7 @@ test('an agent adds a draft over MCP: a suggestion until accepted, then submitte
   await expect(win.getByText(/Suggested by Codex/)).toBeHidden();
 });
 
-test('asking Claude about a line: the answer shows on the line, and its comment arrives as a suggestion', async () => {
+test('asking Claude about a line: the line gets a marker, the answer is in the Agent panel, its comment a suggestion', async () => {
   await win.evaluate(() =>
     (globalThis as unknown as { api: Api }).api.askAgent('github.com/acme/demo#1', {
       kind: 'lines',
@@ -272,8 +272,15 @@ test('asking Claude about a line: the answer shows on the line, and its comment 
       target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 6, endLine: 6 },
     }),
   );
-  await expect(win.getByText('You asked Claude:')).toBeVisible({ timeout: 20_000 });
-  await expect(win.getByText('Yes, negative items would lower the total. I added a comment.')).toBeVisible({ timeout: 20_000 });
-  await expect(win.getByText('Suggested by Claude · not in your review until you accept it')).toBeVisible();
-  await expect(win.getByText('1 comment added · 1 waiting for you to accept:')).toBeVisible();
+  await expect(win.getByText('Asked Claude:')).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Answered', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Suggested by Claude', { exact: true })).toBeVisible();
+  // The answer isn't shown in the diff, only in the Agent panel.
+  const answer = 'Yes, negative items would lower the total. I added a comment.';
+  const panel = win.getByRole('complementary', { name: 'Agent' });
+  await expect(panel).toHaveCount(0);
+  await expect(win.getByText(answer)).toHaveCount(0);
+  await win.getByRole('button', { name: 'Show in Agent panel' }).click();
+  await expect(panel.getByText(answer)).toBeVisible();
+  await expect(panel.getByText('1 comment added · 1 waiting for you to accept:')).toBeVisible();
 });

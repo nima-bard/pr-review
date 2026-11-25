@@ -32,13 +32,17 @@ export interface LineContext {
   threads: { author: string; body: string }[];
 }
 
-/** A short label for a request, for the Agent panel and ask cards. */
-export function requestLabel(request: AgentRequest): string {
+/**
+ * A short label for a request, for the Agent panel and ask cards. `fileName`: only the file's name, not its folders,
+ * for headers where a long path would push the line number out of sight (the full label goes in the tooltip).
+ */
+export function requestLabel(request: AgentRequest, { fileName = false } = {}): string {
   if (request.kind === 'review') return 'Review the pull request';
   if (request.kind === 'lines' && request.target) {
     const t = request.target;
     const lines = t.startLine === t.endLine ? `${t.endLine}` : `${t.startLine}–${t.endLine}`;
-    return `${t.path}:${lines}${t.side === 'LEFT' ? ' (old)' : ''}`;
+    const path = fileName ? (t.path.split('/').at(-1) ?? t.path) : t.path;
+    return `${path}:${lines}${t.side === 'LEFT' ? ' (old)' : ''}`;
   }
   return 'Request';
 }

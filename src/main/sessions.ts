@@ -30,7 +30,7 @@ import { claudeCode } from './agents/claudeCode';
 import { claudeDesktop } from './agents/claudeDesktop';
 import { claudeTerminal } from './agents/claudeTerminal';
 import { commandConnector } from './agents/command';
-import { claudeBin, type Connector } from './agents/connector';
+import { claudeBin, runWithTerminal, type Connector } from './agents/connector';
 
 export interface RegistryHost {
   userDataDir: string;
@@ -171,11 +171,12 @@ export class SessionRegistry implements ChannelBridge {
   private async openAgentInDesktop(key: string): Promise<void> {
     const cwd = this.session(key).current?.worktree.path;
     const id = await this.agents.desktopSession(key);
-    await new Promise<void>((resolve, reject) =>
-      execFile(claudeBin(), ['--desktop', '--resume', id], { cwd, timeout: 30_000 }, (err, _out, stderr) =>
-        err ? reject(new Error(`Could not open the session in Claude Desktop: ${stderr.trim() || err.message}. Claude Desktop needs Claude Code 2.1.285 or later and a subscription sign-in.`)) : resolve(),
-      ),
-    );
+    try {
+      await runWithTerminal(claudeBin(), ['--desktop', '--resume', id], cwd);
+    } catch (err) {
+      const detail = (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
+      throw new Error(`Could not open the session in Claude Desktop: ${detail}. It needs Claude Code 2.1.285 or later and a subscription sign-in.`);
+    }
     await this.agents.markContinuedInDesktop(key);
   }
 

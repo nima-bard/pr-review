@@ -198,9 +198,9 @@ export function DraftCard({ snapshot, draft }: { snapshot: PrSnapshot; draft: Dr
       <div className="flex items-center gap-2 px-3 py-2 border-b border-line-2">
         <span className="font-semibold">{range}</span>
         {suggested ? (
-          <Badge tone="warn" className="max-w-[260px] truncate">
-            Suggested by {draft.origin!.agent} · not in your review until you accept it
-          </Badge>
+          <span title="Not in your review until you accept it" className="inline-flex">
+            <Badge tone="warn">Suggested by {draft.origin!.agent}</Badge>
+          </span>
         ) : (
           <Badge tone="info">{draft.origin ? `Draft · from ${draft.origin.agent}` : 'Draft · not posted yet'}</Badge>
         )}

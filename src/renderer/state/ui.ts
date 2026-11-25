@@ -37,8 +37,10 @@ export interface PrUi {
   showRuns: boolean;
   /** The Agent panel: the PR's conversation with its agent (⇧⌘A). */
   showAgent: boolean;
-  /** Answers to line asks hidden from the diff (they stay in the Agent panel). */
+  /** Line asks whose marker is hidden from the diff (they stay in the Agent panel). */
   hiddenAsks: Record<string, true>;
+  /** A request the Agent panel should scroll to and highlight; `seq` repeats a jump to the same one. */
+  focusTurn: { id: string; seq: number } | null;
   showVersions: boolean;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
@@ -81,6 +83,7 @@ const DEFAULT_UI: PrUi = {
   showRuns: false,
   showAgent: false,
   hiddenAsks: {},
+  focusTurn: null,
   pendingCompare: null,
   sidebar: 'files',
   search: { pattern: '', matchCase: false, wholeWord: false, regex: false, include: '', exclude: '', scope: 'changed' },
@@ -105,6 +108,11 @@ export function usePrUi(key: string): PrUi {
 
 export function getPrUi(key: string): PrUi {
   return useUiStore.getState().byKey[key] ?? DEFAULT_UI;
+}
+
+/** Opens the Agent panel at request `turnId` (from a line's ask marker). */
+export function showTurn(key: string, turnId: string): void {
+  updateUi(key, (ui) => ({ showAgent: true, focusTurn: { id: turnId, seq: (ui.focusTurn?.seq ?? 0) + 1 } }));
 }
 
 export function updateUi(key: string, patch: Partial<PrUi> | ((ui: PrUi) => Partial<PrUi>)): void {

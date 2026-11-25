@@ -5,7 +5,7 @@ import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, Select, Spinner } from '../../components/ui';
 import { askAgent, useAgentFor, useAgents } from '../../state/agents';
 import { loadAgentSession, useAgentSession } from '../../state/sessions';
-import { focusFile, updateUi } from '../../state/ui';
+import { focusFile, updateUi, usePrUi } from '../../state/ui';
 import { openSettings } from '../../state/tabs';
 
 const STATUS: Record<AgentTurn['status'], { label: string; tone: 'muted' | 'info' | 'warn' | 'ok' | 'bad' }> = {
@@ -21,7 +21,7 @@ const STATUS: Record<AgentTurn['status'], { label: string; tone: 'muted' | 'info
 const cost = (usd: number) => (usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);
 
 /** One request and its answer: what was asked, what the agent did, its reply, and the suggestions it added. */
-export function TurnCard({ snapshot, turn, compact = false }: { snapshot: PrSnapshot; turn: AgentTurn; compact?: boolean }) {
+export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: PrSnapshot; turn: AgentTurn; highlighted?: boolean }) {
   const key = snapshot.key;
   const [showActivity, setShowActivity] = useState(false);
   const live = turn.status === 'queued' || turn.status === 'running';
@@ -29,10 +29,13 @@ export function TurnCard({ snapshot, turn, compact = false }: { snapshot: PrSnap
   const waiting = suggestions.filter((d) => d.origin?.acceptedAt === null);
   const status = STATUS[turn.status];
   return (
-    <div className="flex flex-col gap-1.5 px-3 py-2.5 rounded-[9px] bg-raised border border-line-2 font-sans">
+    <div
+      id={`turn-${turn.id}`}
+      className={cx('flex flex-col gap-1.5 px-3 py-2.5 rounded-[9px] bg-raised border font-sans transition-colors', highlighted ? 'border-accent' : 'border-line-2')}
+    >
       <span className="flex items-center gap-2 min-w-0">
-        <span className="text-[12px] font-semibold text-strong truncate">
-          {turn.agent} · {requestLabel(turn.request)}
+        <span className="text-[12px] font-semibold text-strong truncate" title={requestLabel(turn.request)}>
+          {turn.agent} · {requestLabel(turn.request, { fileName: true })}
         </span>
         <span className="flex-1" />
         {turn.status === 'running' ? <Spinner /> : null}
@@ -43,11 +46,20 @@ export function TurnCard({ snapshot, turn, compact = false }: { snapshot: PrSnap
           </Button>
         )}
       </span>
-      {turn.request.prompt.trim() && !compact && <span className="text-[12.5px] text-soft whitespace-pre-wrap line-clamp-4">{turn.request.prompt}</span>}
+      {turn.request.prompt.trim() && <span className="text-[12.5px] text-soft whitespace-pre-wrap line-clamp-4">{turn.request.prompt}</span>}
       {turn.activity.length > 0 && (
-        <button type="button" onClick={() => setShowActivity(!showActivity)} className="flex items-center gap-1 w-fit text-[11.5px] text-muted hover:text-fg cursor-pointer">
+        <button
+          type="button"
+          onClick={() => setShowActivity(!showActivity)}
+          title={!showActivity && live ? turn.activity.at(-1) : undefined}
+          className="flex items-center gap-1 max-w-full min-w-0 text-left text-[11.5px] text-muted hover:text-fg cursor-pointer"
+        >
           <Icon name="chevron" size={10} rotate={showActivity ? 0 : -90} />
-          {showActivity ? 'Hide' : 'Show'} what it did ({turn.activity.length}){!showActivity && live ? ` · ${turn.activity.at(-1)}` : ''}
+          <span className="flex-none">
+            {showActivity ? 'Hide' : 'Show'} what it did ({turn.activity.length})
+          </span>
+          {/* The latest step on one line; a long file path is cut, the tooltip has all of it. */}
+          {!showActivity && live && <span className="min-w-0 truncate">· {turn.activity.at(-1)}</span>}
         </button>
       )}
       {showActivity && (
@@ -108,6 +120,16 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
     const el = list.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [turns.length, last?.reply, last?.activity.length]);
+  // "Show in Agent panel" on a line: bring that request into view and mark it for a moment.
+  const focusTurn = usePrUi(key).focusTurn;
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusTurn) return;
+    list.current?.querySelector(`#turn-${CSS.escape(focusTurn.id)}`)?.scrollIntoView({ block: 'center' });
+    setHighlighted(focusTurn.id);
+    const timer = setTimeout(() => setHighlighted(null), 2000);
+    return () => clearTimeout(timer);
+  }, [focusTurn]);
 
   const send = async () => {
     if (!text.trim()) return;
@@ -159,7 +181,7 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
               </div>
             )}
             {turns.map((t) => (
-              <TurnCard key={t.id} snapshot={snapshot} turn={t} />
+              <TurnCard key={t.id} snapshot={snapshot} turn={t} highlighted={highlighted === t.id} />
             ))}
           </div>
           {error && (
