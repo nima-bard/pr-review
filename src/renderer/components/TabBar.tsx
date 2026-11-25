@@ -2,7 +2,7 @@ import { api } from '../api';
 import { dismissUpdate, useUpdates } from '../state/updates';
 import { useWaitingCount } from '../state/inbox';
 import { useSessions } from '../state/sessions';
-import { activate, closeTab, moveTab, newTab, popOutKey, popOutTab, useTabs, type Tab } from '../state/tabs';
+import { activate, closeTab, moveTab, newTab, openSettings, popOutKey, popOutTab, useTabs, type Tab } from '../state/tabs';
 import { Avatar, cx, Icon } from './ui';
 import { MARKER_CLASS, useTabReorder } from './useTabReorder';
 
@@ -114,6 +114,18 @@ export function TabBar() {
       </button>
       <div className="flex-1" />
       <UpdateNotice />
+      {/* Settings in sight on every page (also ⌘, and the app menu): it's where agents and the rest are set up. */}
+      {!popOutKey && (
+        <button
+          type="button"
+          title="Settings (⌘,)"
+          onClick={() => openSettings()}
+          className="no-drag flex items-center gap-1.5 h-[30px] mb-0.5 mr-2 px-2.5 rounded-[7px] text-soft text-[12.5px] hover:bg-raised hover:text-fg cursor-pointer"
+        >
+          <Icon name="sliders" size={14} />
+          Settings
+        </button>
+      )}
     </div>
   );
 }
