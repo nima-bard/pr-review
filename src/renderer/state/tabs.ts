@@ -5,6 +5,7 @@ import { api, errorText } from '../api';
 import { markOpened } from './recents';
 import { moveToSlot } from './reorder';
 import { checkSoon, forgetSession, setSessionError } from './sessions';
+import { showSettingsSection, type SettingsSection } from './settingsPage';
 
 /**
  * A PR tab restored at startup is `dormant`: it only has a `summary` (title and author, for the tab bar) until it
@@ -48,7 +49,9 @@ export function openPrLink(input: string): void {
 }
 
 /** Switches to the Settings tab, opening one if none is open. */
-export function openSettings(): void {
+/** Opens Settings (or switches to it), at `section` if given. */
+export function openSettings(section?: SettingsSection): void {
+  if (section) showSettingsSection(section);
   const existing = useTabs.getState().tabs.find((t) => t.kind === 'settings');
   if (existing) return activate(existing.id);
   const tab: Tab = { id: newId(), kind: 'settings' };

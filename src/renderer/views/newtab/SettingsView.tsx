@@ -1,15 +1,19 @@
 import { MultiFileDiff } from '@pierre/diffs/react';
 import { useEffect, useRef, useState } from 'react';
-import type { AuthStatus, Settings } from '../../../shared/model';
+import type { AuthStatus, BrowserExtensionInfo, Settings } from '../../../shared/model';
 import iconLicense from 'material-icon-theme/LICENSE?raw';
 import octiconsLicense from '../../components/octicons.LICENSE.txt?raw';
 import hydraLicense from '../../diff/hydra/LICENSE.txt?raw';
 import { APP_THEMES, DARK_CODE_THEMES, LIGHT_CODE_THEMES, type AppTheme } from '../../../shared/themes';
 import { api, errorText } from '../../api';
 import { Button, cx, ErrorBox, Select, Spinner } from '../../components/ui';
+import { Octicon, type OcticonName } from '../../components/octicons';
+import { setSettingsStatus, showSettingsSection, useSettingsPage, type SettingsSection } from '../../state/settingsPage';
 import { CODE_FONT_SUGGESTIONS, UI_FONT_SUGGESTIONS, useFontStatus, type FontSlot } from '../../state/fonts';
 import { applyAppSettings, useAppSettings, useDiffAppearance } from '../../state/settings';
 import { showSetup } from '../../state/setup';
+import { checkForUpdate, useUpdates } from '../../state/updates';
+import { QuickActionsSettings } from './QuickActionsSettings';
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -208,29 +212,70 @@ function CodeThemePicker() {
   );
 }
 
-/** How github.com pull request links get to the app: the Chrome extension, set up once. */
+/** How github.com pull request links get to the app: the browser extension, set up once. */
 function OpenFromGitHub() {
+  const [info, setInfo] = useState<BrowserExtensionInfo | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    void api.browserExtensionInfo().then(setInfo);
+  }, []);
+  // Chrome when none is found: still the most likely one.
+  const browsers = info?.browsers.length ? info.browsers : [{ name: 'Chrome', page: 'chrome://extensions' }];
+  const code = 'font-mono text-[12px] px-1 rounded bg-chip';
+  const openPage = async (b: { name: string; page: string }) => {
+    await navigator.clipboard.writeText(b.page);
+    const opened = await api.openExtensionsPage(b.page);
+    setNote(opened ? `Opened ${b.name}. If it didn't show the extensions page, paste ${b.page} (copied) into its address bar.` : `Copied ${b.page}: paste it into ${b.name}'s address bar.`);
+  };
   return (
-    <section aria-labelledby="from-gh-h" className="flex flex-col gap-2 p-3.5 rounded-[10px] border border-line-2 bg-card">
+    <section aria-labelledby="from-gh-h" className="flex flex-col gap-2.5 p-3.5 rounded-[10px] border border-line-2 bg-card">
       <h3 id="from-gh-h" className="font-semibold text-strong">
         Open pull requests from GitHub
       </h3>
       <p className="text-[12.5px] text-fg leading-relaxed">
-        Like Zoom with meeting links: with the PR Review extension in Chrome, a GitHub pull request link opens here, whether you click it on github.com or open it from Slack, Mail or anywhere else. Chrome asks
-        &ldquo;Open PR Review?&rdquo; the first time; tick &ldquo;Always allow&rdquo; and it goes straight through.
+        With the PR Review extension in your browser, GitHub pull request links open here, whether you click them on github.com or open them from Slack, Mail or anywhere else. The browser asks
+        &ldquo;Open PR Review?&rdquo; the first time; tick &ldquo;Always allow&rdquo; and it goes straight through. It works in Chrome, Edge and other Chromium browsers.
       </p>
-      <ol className="list-decimal pl-5 text-[12.5px] text-fg leading-relaxed">
+      <ol className="list-decimal pl-5 flex flex-col gap-1.5 text-[12.5px] text-fg leading-relaxed">
         <li>
-          In Chrome, open <code className="font-mono text-[12px] px-1 rounded bg-chip">chrome://extensions</code> and turn on Developer mode.
+          Open the extensions page:{' '}
+          {browsers.map((b, i) => (
+            <span key={b.page}>
+              {i > 0 && ' or '}
+              <button type="button" onClick={() => void openPage(b)} title={`Open in ${b.name} (the address is also copied)`} className={`${code} text-link hover:underline cursor-pointer`}>
+                {b.page}
+              </button>
+            </span>
+          ))}
+          , and turn on <strong>Developer mode</strong> (top right).
         </li>
-        <li>Click Load unpacked and pick the extension folder.</li>
+        <li>
+          Drag the extension folder from Finder onto that page. Or click <strong>Load unpacked</strong> and pick the folder: it&rsquo;s inside the app, so in the picker press <span className={code}>⇧⌘G</span> and paste its
+          path.
+        </li>
       </ol>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" onClick={() => void api.revealBrowserExtension()}>
-          Show extension folder
-        </Button>
-        <span className="text-[12px] text-muted">Its toolbar button turns automatic opening on or off, for all repositories or one at a time. Links PR Review opens in the browser itself, like &ldquo;View on GitHub&rdquo;, stay on GitHub.</span>
-      </div>
+      {info && (
+        <div className="flex flex-wrap items-center gap-2">
+          <code className="min-w-0 flex-1 truncate font-mono text-[12px] px-2 py-1 rounded-md bg-chip text-fg" title={info.path}>
+            {info.path}
+          </code>
+          <Button size="sm" onClick={() => void navigator.clipboard.writeText(info.path).then(() => setNote('Copied the folder\'s path.'))}>
+            Copy path
+          </Button>
+          <Button size="sm" onClick={() => void api.revealBrowserExtension()}>
+            Show in Finder
+          </Button>
+        </div>
+      )}
+      {note && (
+        <span role="status" className="text-[12px] text-muted">
+          {note}
+        </span>
+      )}
+      <span className="text-[12px] text-muted">
+        The extension&rsquo;s toolbar button turns automatic opening on or off, for all repositories or one at a time, and pull request pages get an &ldquo;Open in PR Review&rdquo; button. Links PR Review opens in the browser itself,
+        like &ldquo;View on GitHub&rdquo;, stay on GitHub.
+      </span>
     </section>
   );
 }
@@ -303,59 +348,128 @@ export function SignIn({ clientId, onClientId }: { clientId: string; onClientId(
   );
 }
 
-export function SettingsView() {
+/** The version, and a check against the latest GitHub release. */
+function AboutVersion() {
+  const { info, checking } = useUpdates();
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button size="sm" disabled={checking} onClick={() => void checkForUpdate()}>
+        {checking ? 'Checking…' : 'Check for updates'}
+      </Button>
+      <span className="text-[12px] text-muted">
+        {info ? `PR Review ${info.current}` : 'PR Review'}
+        {info?.error ? ` · Couldn't check: ${info.error}` : info?.available ? '' : info?.latest ? ' · the latest version' : ''}
+      </span>
+      {info?.available && info.url && (
+        <button type="button" onClick={() => void api.openExternal(info.url!)} className="text-[12px] text-link hover:underline cursor-pointer">
+          Version {info.latest} is available: download
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Saves changes to some settings a moment after the last one, over the latest saved settings (each page saves its own). */
+function useSettingsSaver() {
   const [s, setS] = useState<Settings | null>(null);
-  const [roots, setRoots] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const setStatus = setSettingsStatus;
+  const pending = useRef<Partial<Settings>>({});
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    void api.getSettings().then((v) => {
-      setS(v);
-      setRoots(v.scanRoots.join('\n'));
-    });
+    void api.getSettings().then(setS);
   }, []);
 
-  if (!s) return <Spinner label="Loading settings…" />;
-  const set = (patch: Partial<Settings>) => {
-    setS({ ...s, ...patch });
-    setSaved(false);
-  };
-
-  const save = async () => {
-    setError(null);
+  const flush = useRef(async () => {
+    timer.current = null;
+    const patch = pending.current;
+    pending.current = {};
+    if (Object.keys(patch).length === 0) return;
     try {
-      const { appTheme, codeTheme, diffTint, diffLineHeight, commentFontSize, codeFontSize, uiFont, codeFont } = useAppSettings.getState();
-      const next = { ...s, appTheme, codeTheme, diffTint, diffLineHeight, commentFontSize, codeFontSize, uiFont, codeFont, scanRoots: roots.split('\n').map((r) => r.trim()).filter(Boolean) };
-      await api.saveSettings(next);
-      applyAppSettings(next);
-      await api.rescanRepos();
-      setSaved(true);
+      const current = await api.getSettings();
+      await api.saveSettings({ ...current, ...patch });
+      // New folders to scan: find the clones in them now.
+      if (patch.scanRoots) await api.rescanRepos();
+      setStatus('Saved');
     } catch (err) {
-      setError(errorText(err));
+      setStatus(errorText(err));
     }
-  };
+  });
 
+  // Leaving the page saves what's still waiting.
+  useEffect(
+    () => () => {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        void flush.current();
+      }
+    },
+    [],
+  );
+
+  const set = (patch: Partial<Settings>, wait = 600) => {
+    setS((cur) => cur && { ...cur, ...patch });
+    pending.current = { ...pending.current, ...patch };
+    setStatus('Saving…');
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => void flush.current(), wait);
+  };
+  return { s, set };
+}
+
+function GeneralPage() {
+  const { s, set } = useSettingsSaver();
+  const [roots, setRoots] = useState<string | null>(null);
+  if (!s) return <Spinner label="Loading settings…" />;
   return (
-    <section aria-label="Settings" className="max-w-[720px] flex flex-col gap-5">
-      <SignIn
-        clientId={s.oauthClientId}
-        onClientId={(id) => {
-          set({ oauthClientId: id });
-          void api.saveSettings({ ...s, ...useAppSettings.getState(), oauthClientId: id });
-        }}
-      />
-      <CodeThemePicker />
-      <OpenFromGitHub />
-      <Field label="Folders to scan for clones" hint="One per line. Each folder's direct subfolders are checked for git clones; their remotes map owner/repo to the clone.">
-        <textarea rows={3} value={roots} onChange={(e) => (setRoots(e.target.value), setSaved(false))} className="px-3 py-2 rounded-lg bg-card border border-line-2 focus:border-accent outline-none font-mono text-[12.5px]" />
+    <>
+      <Field label="Folders with your clones" hint="One per line. Each folder’s direct subfolders are checked for git clones, and their remotes tell which repository each one is.">
+        <textarea
+          rows={3}
+          value={roots ?? s.scanRoots.join('\n')}
+          onChange={(e) => {
+            setRoots(e.target.value);
+            set({ scanRoots: e.target.value.split('\n').map((r) => r.trim()).filter(Boolean) }, 900);
+          }}
+          className="px-3 py-2 rounded-lg bg-card border border-line-2 focus:border-accent outline-none font-mono text-[12.5px]"
+        />
       </Field>
-      <Field label="Worktree folder" hint="Empty: next to the clone, e.g. ~/source/my-app.worktrees/pr-123. Set a folder to use <folder>/wt-pr-123 instead.">
+      <Field label="Worktree folder" hint="Where pull requests are checked out. Empty: next to the clone, e.g. ~/source/my-app.worktrees/pr-123. A folder: <folder>/wt-pr-123.">
         <input value={s.worktreeRoot ?? ''} onChange={(e) => set({ worktreeRoot: e.target.value.trim() || null })} placeholder="(next to the clone)" className={INPUT} />
       </Field>
-      <Field label="Editor command" hint="Used for “Open in editor”; called as <command> -g file:line (code, cursor, windsurf…).">
+      <Field label="Editor command" hint="For “Open in Editor”; called as <command> -g file:line (code, cursor, windsurf…).">
         <input value={s.editorCommand} onChange={(e) => set({ editorCommand: e.target.value })} className={INPUT} />
       </Field>
+      <div className="flex items-center gap-3 pt-2 border-t border-line">
+        <Button size="sm" onClick={() => showSetup(true)}>
+          Run setup again
+        </Button>
+        <span className="text-[12px] text-muted">GitHub sign-in, where your clones are, worktrees, editor and look.</span>
+      </div>
+    </>
+  );
+}
+
+function GitHubPage() {
+  const { s, set } = useSettingsSaver();
+  if (!s) return <Spinner label="Loading settings…" />;
+  return (
+    <>
+      <SignIn clientId={s.oauthClientId} onClientId={(id) => set({ oauthClientId: id }, 300)} />
+      <OpenFromGitHub />
+    </>
+  );
+}
+
+function CommentsPage() {
+  const { s, set } = useSettingsSaver();
+  if (!s) return <Spinner label="Loading settings…" />;
+  return (
+    <>
+      <p className="text-[12.5px] text-fg leading-relaxed">
+        When a pull request changes, its comments are placed again in the current code: where the lines they were on went, or by their content when those lines changed. These scores decide how sure that has to be.
+        Open pull requests use new values on their next sync.
+      </p>
       <div className="grid grid-cols-2 gap-4">
         <Field label="Re-anchor threshold" hint="Fuzzy score needed to place an outdated comment as “Re-anchored”.">
           <input type="number" step="0.05" min="0" max="1" value={s.placeThreshold} onChange={(e) => set({ placeThreshold: Number(e.target.value) })} className={INPUT} />
@@ -366,30 +480,29 @@ export function SettingsView() {
       </div>
       <div className="flex flex-col gap-2 p-3.5 rounded-[10px] border border-line-2 bg-card">
         <label className="flex items-center gap-2.5 cursor-pointer">
-          <input type="checkbox" checked={s.aiEnabled} onChange={(e) => set({ aiEnabled: e.target.checked })} style={{ accentColor: 'var(--c-accent)' }} />
+          <input type="checkbox" checked={s.aiEnabled} onChange={(e) => set({ aiEnabled: e.target.checked }, 0)} style={{ accentColor: 'var(--c-accent)' }} />
           <span className="font-semibold text-strong">Ask Claude to place low-confidence comments</span>
         </label>
         <span className="text-[12px] text-muted pl-6">
-          Off by default. When on, one call to your local Claude Code CLI per refresh handles “best guess” and “location lost” threads. Results are labelled “AI-matched” and cached per push.
+          Off by default. When on, one call to your local Claude Code CLI per sync handles “best guess” and “location lost” threads. Results are labelled “AI-matched” and cached per push.
         </span>
         <label className="flex items-center gap-2 pl-6">
           <span className="text-[12px] text-muted">Model</span>
           <input value={s.aiModel} onChange={(e) => set({ aiModel: e.target.value })} className="h-7 px-2 rounded-md bg-side border border-line-2 font-mono text-[12px] outline-none focus:border-accent" />
         </label>
       </div>
-      {error && <ErrorBox message={error} />}
-      <div className="flex items-center gap-3">
-        <Button variant="primary" onClick={() => void save()}>
-          Save settings
-        </Button>
-        {saved && <span className="text-add text-[12.5px]">Saved. Open pull requests pick up threshold changes on their next refresh.</span>}
-      </div>
-      <div className="flex items-center gap-3">
-        <Button size="sm" onClick={() => showSetup(true)}>
-          Run setup again
-        </Button>
-        <span className="text-[12px] text-muted">GitHub sign-in, where your clones are, worktrees, editor and look.</span>
-      </div>
+    </>
+  );
+}
+
+function AboutPage() {
+  return (
+    <>
+      <AboutVersion />
+      <p className="text-[12.5px] text-fg leading-relaxed">
+        PR Review talks to the GitHub API with your token and to nothing else of its own; there’s no telemetry. The default fonts load from Google Fonts (clear both font fields under Appearance to use the
+        bundled ones).
+      </p>
       <details className="text-[12px] text-muted">
         <summary className="cursor-pointer w-fit">Acknowledgements</summary>
         <p className="mt-2">
@@ -405,6 +518,68 @@ export function SettingsView() {
         </p>
         <pre className="mt-2 p-3 rounded-lg bg-card border border-line whitespace-pre-wrap font-mono text-[11px]">{hydraLicense}</pre>
       </details>
-    </section>
+    </>
+  );
+}
+
+const SECTIONS: { id: SettingsSection; title: string; desc: string; icon: OcticonName; page: () => React.ReactNode }[] = [
+  { id: 'general', title: 'General', desc: 'Where your clones are, where pull requests are checked out, and your editor.', icon: 'file-directory', page: () => <GeneralPage /> },
+  { id: 'appearance', title: 'Appearance', desc: 'The app and code themes, fonts and sizes. Changes apply right away to every open tab.', icon: 'paintbrush', page: () => <CodeThemePicker /> },
+  { id: 'github', title: 'GitHub', desc: 'Your sign-in, and opening GitHub pull request links in the app.', icon: 'mark-github', page: () => <GitHubPage /> },
+  {
+    id: 'quick-actions',
+    title: 'Quick actions',
+    desc: 'Your own commands for a pull request, like asking Claude for a review or running the tests: from the Actions button on its Overview, with ⌥⌘1–9, or from a file’s ⋯ menu.',
+    icon: 'zap',
+    page: () => <QuickActionsSettings />,
+  },
+  { id: 'comments', title: 'Comments', desc: 'How review comments are placed again when the code they’re on changes.', icon: 'comment-discussion', page: () => <CommentsPage /> },
+  { id: 'about', title: 'About', desc: 'Version and updates, privacy, and the open-source parts inside.', icon: 'info', page: () => <AboutPage /> },
+];
+
+/** Settings: a page per section, picked in the sidebar. Everything saves as it changes. */
+export function SettingsView() {
+  const section = useSettingsPage((s) => s.section);
+  const status = useSettingsPage((s) => s.status);
+  const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!;
+  return (
+    <div className="h-full flex">
+      <nav aria-label="Settings" className="w-[220px] flex-none flex flex-col gap-0.5 px-3 py-5 bg-side border-r border-line overflow-y-auto">
+        <h1 className="px-2.5 mb-3 text-[16px] font-semibold text-strong">Settings</h1>
+        {SECTIONS.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            aria-current={s.id === current.id ? 'page' : undefined}
+            onClick={() => showSettingsSection(s.id)}
+            className={cx('flex items-center gap-2.5 h-8 px-2.5 rounded-md text-left cursor-pointer', s.id === current.id ? 'bg-active text-strong font-semibold' : 'text-fg hover:bg-hover')}
+          >
+            <Octicon name={s.icon} size={15} className={s.id === current.id ? 'text-accent' : 'text-muted'} />
+            {s.title}
+          </button>
+        ))}
+      </nav>
+      <div className="flex-1 min-w-0 overflow-y-auto">
+        <section aria-labelledby="settings-h" className="max-w-[820px] mx-auto px-8 pt-6 pb-12 flex flex-col gap-5">
+          <header className="flex flex-col gap-1 pb-4 border-b border-line">
+            <div className="flex items-baseline gap-3">
+              <h2 id="settings-h" className="flex-1 text-[18px] font-semibold text-strong">
+                {current.title}
+              </h2>
+              {status && (
+                <span role="status" className={cx('text-[12px]', status === 'Saved' || status === 'Saving…' ? 'text-muted' : 'text-del')}>
+                  {status}
+                </span>
+              )}
+            </div>
+            <p className="text-[12.5px] text-muted">{current.desc}</p>
+          </header>
+          {/* Keyed: each page loads the saved settings when it opens. */}
+          <div key={current.id} className="flex flex-col gap-5">
+            {current.page()}
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }

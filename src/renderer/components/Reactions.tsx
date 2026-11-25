@@ -21,7 +21,8 @@ const BY_CONTENT = new Map(REACTIONS.map((r) => [r.content, r]));
  * GitHub-style reactions: a smiley that opens the eight-emoji picker, then one pill per reaction in use.
  * The picker is portalled to <body> with fixed positioning, so cards with overflow:hidden can't clip it.
  */
-export function Reactions({ prKey, subjectId, reactions }: { prKey: string; subjectId: string; reactions: readonly Reaction[] }) {
+/** `disabled`: shown, but not yet to be changed (the PR is still loading). */
+export function Reactions({ prKey, subjectId, reactions, disabled = false }: { prKey: string; subjectId: string; reactions: readonly Reaction[]; disabled?: boolean }) {
   const [picker, setPicker] = useState<{ left: number; top: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +82,7 @@ export function Reactions({ prKey, subjectId, reactions }: { prKey: string; subj
         aria-label="Add reaction"
         title="Add reaction"
         aria-expanded={picker !== null}
-        disabled={busy}
+        disabled={busy || disabled}
         onClick={() => {
           const b = button.current?.getBoundingClientRect();
           setPicker(picker || !b ? null : { left: b.left, top: b.bottom + 6 });
@@ -100,7 +101,7 @@ export function Reactions({ prKey, subjectId, reactions }: { prKey: string; subj
             aria-pressed={r.viewerHasReacted}
             aria-label={`${meta.label}: ${r.count}${r.viewerHasReacted ? ', including you' : ''}`}
             title={r.viewerHasReacted ? `Remove your ${meta.label}` : `React with ${meta.label}`}
-            disabled={busy}
+            disabled={busy || disabled}
             onClick={() => void toggle(r.content, !r.viewerHasReacted)}
             className={cx(
               'inline-flex items-center gap-1 h-7 px-2 rounded-full border text-[12px] font-semibold cursor-pointer disabled:opacity-60',

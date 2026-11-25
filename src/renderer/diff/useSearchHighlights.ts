@@ -1,6 +1,6 @@
 import { useEffect, type RefObject } from 'react';
 import { matcher, matchRanges } from '../../shared/searchMatch';
-import { usePrUi } from '../state/ui';
+import { usePrUi, type FindSide } from '../state/ui';
 
 /** The highlight's name; its style is in the code views' own CSS (settings.ts), since Pierre draws code in shadow roots. */
 export const SEARCH_HIGHLIGHT = 'pr-search';
@@ -33,9 +33,24 @@ export function lineRanges(line: HTMLElement, re: RegExp): Range[] {
 }
 
 /**
+ * How a drawn code line takes part in a search of `side`: 'count' (its matches count), 'twin' (the left copy of an
+ * unchanged line in a split diff when searching both versions: marked, but counted once, on the right) or 'skip'.
+ * A split diff draws the old version in its left column and the new one in its right; a unified diff tells them apart
+ * by the line's type. Lines of a plain file view are in both.
+ */
+export function lineRole(line: HTMLElement, side: FindSide): 'count' | 'twin' | 'skip' {
+  const type = line.dataset.lineType ?? '';
+  const column = line.closest('[data-deletions]') ? 'old' : line.closest('[data-additions]') ? 'new' : null;
+  if (side === 'both') return column === 'old' && !type.includes('deletion') ? 'twin' : 'count';
+  const version = column ?? (type.includes('deletion') ? 'old' : type.includes('addition') ? 'new' : 'both');
+  return version === side || version === 'both' ? 'count' : 'skip';
+}
+
+/**
  * Marks the search text in the code under `root`, like VS Code marks search matches in open editors, while the PR's
  * search sidebar has a query and this view is on screen. It uses the CSS Custom Highlight API, so neither React's
- * nor Pierre's DOM is touched, and repaints when Pierre redraws lines (loading, highlighting, expanding).
+ * nor Pierre's DOM is touched, and repaints when Pierre redraws lines (loading, highlighting, expanding). Only the new
+ * version: the search looks at the files as they are now, so a deleted line is never one of its results.
  */
 export function useSearchHighlights(root: RefObject<HTMLElement | null>, key: string, onScreen: boolean): void {
   const ui = usePrUi(key);
@@ -64,7 +79,7 @@ export function useSearchHighlights(root: RefObject<HTMLElement | null>, key: st
       for (const host of root.current?.querySelectorAll('diffs-container') ?? []) {
         if (!host.shadowRoot) continue;
         watch(host.shadowRoot);
-        for (const line of host.shadowRoot.querySelectorAll<HTMLElement>('[data-line]')) ranges.push(...lineRanges(line, re!));
+        for (const line of host.shadowRoot.querySelectorAll<HTMLElement>('[data-line]')) if (lineRole(line, 'new') === 'count') ranges.push(...lineRanges(line, re!));
       }
       registry.set(SEARCH_HIGHLIGHT, new Highlight(...ranges));
     }

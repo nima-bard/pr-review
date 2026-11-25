@@ -11,7 +11,7 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'success';
 
 export function Button({ variant = 'secondary', size = 'md', className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' }) {
   return (
@@ -25,6 +25,7 @@ export function Button({ variant = 'secondary', size = 'md', className, ...rest 
         variant === 'secondary' && 'bg-raised-2 border border-line-2 text-fg hover:bg-btn-hover',
         variant === 'ghost' && 'text-muted hover:text-fg hover:bg-raised',
         variant === 'danger' && 'bg-del-bg border border-del-line text-del hover:brightness-110',
+        variant === 'success' && 'bg-success-emphasis text-white font-semibold hover:brightness-110',
         className,
       )}
     />
@@ -181,6 +182,11 @@ export function timeAgo(iso: string | null | undefined): string {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   if (s < 86400 * 30) return `${Math.floor(s / 86400)} d ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+/** A placeholder bar that pulses while what goes there loads; size it with `className`. */
+export function Skeleton({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={cx('block rounded-md bg-raised-2 animate-pulse', className)} />;
 }
 
 export function Spinner({ label }: { label?: string }) {

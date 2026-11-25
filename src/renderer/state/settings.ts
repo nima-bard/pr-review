@@ -95,7 +95,9 @@ export function diffAppearanceCSS(tint: number, lineHeight: number, fontSize: nu
   --diffs-bg-deletion-emphasis: rgb(from var(--diffs-deletion-base) r g b / ${alpha});
 }
 [data-gutter-buffer], [data-column-number] { --mix-dark: ${100 - Math.round(t * 0.75)}%; --mix-light: ${100 - Math.round(t * 0.75)}%; }
-::highlight(pr-search) { background-color: color-mix(in srgb, var(--c-warn) 38%, transparent); }`;
+::highlight(pr-search) { background-color: color-mix(in srgb, var(--c-warn) 38%, transparent); }
+::highlight(pr-find) { background-color: color-mix(in srgb, var(--c-accent) 32%, transparent); }
+::highlight(pr-find-current) { background-color: color-mix(in srgb, var(--c-warn) 75%, transparent); color: var(--c-ink); }`;
 }
 
 /** The Pierre options that come from Settings: syntax theme (and whether it is light or dark), changed-line tint and line height. */

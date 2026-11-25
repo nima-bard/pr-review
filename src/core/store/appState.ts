@@ -21,6 +21,8 @@ export const DEFAULT_SETTINGS: Settings = {
   codeFontSize: 13,
   uiFont: 'Mona Sans',
   codeFont: 'JetBrains Mono',
+  quickActions: [],
+  terminalApp: '',
 };
 
 export interface ManualPlacement {

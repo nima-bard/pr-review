@@ -32,7 +32,7 @@ export async function fetchViewer(client: GitHubClient): Promise<string> {
   return (await client.graphql<ViewerResponse>(VIEWER)).viewer.login;
 }
 
-function checkFromContext(c: CheckContextNode): CheckRun | null {
+export function checkFromContext(c: CheckContextNode): CheckRun | null {
   if (c.__typename === 'CheckRun' && 'name' in c) {
     const state: CheckRun['state'] =
       c.status !== 'COMPLETED'
@@ -50,6 +50,9 @@ function checkFromContext(c: CheckContextNode): CheckRun | null {
   }
   return null;
 }
+
+/** Write access or more: what merging takes. */
+export const canWrite = (permission: string | null | undefined) => permission === 'ADMIN' || permission === 'MAINTAIN' || permission === 'WRITE';
 
 export function workItemsFrom(body: string): string[] {
   return [...new Set(body.match(/\bAB#\d+\b/g) ?? [])];
@@ -116,6 +119,14 @@ export async function fetchDetails(client: GitHubClient, ref: PrRef): Promise<Pr
     checks,
     linkedIssues: pr.closingIssuesReferences.nodes,
     workItems: workItemsFrom(pr.body),
+    mergedAt: pr.mergedAt ?? null,
+    mergedBy: pr.mergedBy?.login ?? null,
+    viewerCan: {
+      merge: canWrite(data.repository?.viewerPermission),
+      close: pr.viewerCanClose === true,
+      reopen: pr.viewerCanReopen === true,
+      update: pr.viewerCanUpdate === true,
+    },
   };
 }
 

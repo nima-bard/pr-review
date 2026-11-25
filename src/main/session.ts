@@ -14,6 +14,11 @@ import {
   type PrDetails,
   type PrRef,
   type EditableKind,
+  type MergeInfo,
+  type MergeInput,
+  type PrEvent,
+  type ReviewerOptions,
+  type PrPreview,
   type PrSnapshot,
   type ReactionContent,
   type Role,
@@ -27,6 +32,17 @@ import {
 } from '../shared/model';
 import { filterPaths, searchWorktree } from '../core/search/codeSearch';
 import { triage } from '../shared/triage';
+import {
+  changeReviewRequests,
+  deleteHeadBranch,
+  disableAutoMerge,
+  fetchMergeInfo,
+  fetchReviewerOptions,
+  mergePullRequest,
+  setPullRequestDraft,
+  setPullRequestOpen,
+  updateBranch,
+} from '../core/github/prActions';
 import { setReaction, toggleReaction, toReactions } from '../core/github/reactions';
 import { anchorFromHunk, anchorFromLines, findAnchor } from '../core/anchor/fuzzy';
 import { createGitTrackIO } from '../core/anchor/gitIO';
@@ -78,8 +94,12 @@ export interface SessionDeps {
   client: GitHubClient;
   viewer: string;
   clonePath: string;
-  emit(event: { type: 'snapshot'; snapshot: PrSnapshot } | { type: 'progress'; message: string } | { type: 'error'; message: string } | { type: 'checked'; at: string }): void;
+  emit(event: SessionEvent): void;
 }
+
+type WithoutKey<E> = E extends unknown ? Omit<E, 'key'> : never;
+/** A session's events, as the app gets them but without the PR's key (the sessions add it). */
+export type SessionEvent = WithoutKey<PrEvent>;
 
 interface WorktreeState {
   path: string;
@@ -205,6 +225,21 @@ export class PrSession {
     const details = await fetchDetails(client, this.ref);
     const role: Role = details.viewerDidAuthor ? 'author' : 'reviewer';
 
+    // GitHub's side doesn't need git, so it loads while the commits are fetched and the worktree is prepared.
+    const conversationLoad = fetchConversation(client, this.ref);
+    const fromGitHub = Promise.all([fetchViewedStates(client, this.ref), fetchThreads(client, this.ref), conversationLoad, fetchViewerReviews(client, this.ref, this.deps.viewer)]);
+    // It's awaited below; this only keeps a failure while git runs from counting as unhandled.
+    fromGitHub.catch(() => undefined);
+    if (!this.snapshot) {
+      // The first load: the app can show the Overview now, and the conversation when it's in.
+      const preview: PrPreview = { key: this.key, ref: this.ref, role, viewer: this.deps.viewer, details, conversation: null };
+      this.deps.emit({ type: 'preview', preview });
+      conversationLoad.then(
+        (c) => !this.snapshot && this.deps.emit({ type: 'preview', preview: { ...preview, conversation: c.items } }),
+        () => undefined,
+      );
+    }
+
     this.progress('Fetching commits…');
     await fetchPullHead(clonePath, this.remote, this.ref.number);
     await this.ensureCommit(details.baseRefOid);
@@ -215,12 +250,7 @@ export class PrSession {
       this.worktree = await this.prepareWorktree(details, role);
     }
 
-    const [viewedStates, threadNodes, conversation, viewerReviews] = await Promise.all([
-      fetchViewedStates(client, this.ref),
-      fetchThreads(client, this.ref),
-      fetchConversation(client, this.ref),
-      fetchViewerReviews(client, this.ref, this.deps.viewer),
-    ]);
+    const [viewedStates, threadNodes, conversation, viewerReviews] = await fromGitHub;
 
     const versions = await this.recordVersions(details.headRefOid, conversation.forcePushes);
     const base = (await mergeBase(clonePath, details.baseRefOid, details.headRefOid)) ?? details.baseRefOid;
@@ -831,6 +861,74 @@ export class PrSession {
     if (!snap) return;
     await reviews.addPrComment(this.deps.client, snap.details.id, body);
     await this.refresh();
+  }
+
+  /** The loaded snapshot, for changes on GitHub that need the PR's id and the head the viewer has seen. */
+  private loaded(): PrSnapshot {
+    if (!this.snapshot) throw new Error('The pull request is still loading.');
+    return this.snapshot;
+  }
+
+  /** Syncs after a change on GitHub: after any sync already running, which may have read GitHub before the change. */
+  private async resync(): Promise<void> {
+    await this.refreshing?.catch(() => undefined);
+    await this.refresh();
+  }
+
+  /** What merging takes (see `MergeInfo`); asks again while GitHub is still working out whether the branch merges cleanly. */
+  async mergeInfo(): Promise<MergeInfo> {
+    for (let attempt = 1; ; attempt++) {
+      const info = await fetchMergeInfo(this.deps.client, this.ref);
+      if (info.mergeable !== 'UNKNOWN' || attempt === 4) return info;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+
+  /**
+   * Merges (or turns on auto-merge, or joins the merge queue) at the head the viewer has seen: GitHub refuses if new
+   * commits came in since. Then deletes the branch if asked, and syncs.
+   */
+  async merge(input: MergeInput): Promise<void> {
+    const snap = this.loaded();
+    await mergePullRequest(this.deps.client, snap.details.id, snap.details.headRefOid, input);
+    let branchError: unknown = null;
+    if (input.action === 'merge' && input.deleteBranch) await deleteHeadBranch(this.deps.client, this.ref).catch((err: unknown) => (branchError = err));
+    await this.resync();
+    if (branchError) throw new Error(`Merged, but the branch couldn't be deleted: ${branchError instanceof Error ? branchError.message : String(branchError)}`);
+  }
+
+  async disableAutoMerge(): Promise<void> {
+    await disableAutoMerge(this.deps.client, this.loaded().details.id);
+    await this.resync();
+  }
+
+  async updateBranch(method: 'MERGE' | 'REBASE'): Promise<void> {
+    const snap = this.loaded();
+    await updateBranch(this.deps.client, snap.details.id, snap.details.headRefOid, method);
+    await this.resync();
+  }
+
+  /** Closes or reopens the pull request, with a comment if there is one (before closing, after reopening). */
+  async setOpen(open: boolean, comment: string): Promise<void> {
+    const id = this.loaded().details.id;
+    if (!open && comment.trim()) await reviews.addPrComment(this.deps.client, id, comment);
+    await setPullRequestOpen(this.deps.client, id, open);
+    if (open && comment.trim()) await reviews.addPrComment(this.deps.client, id, comment);
+    await this.resync();
+  }
+
+  async setDraft(draft: boolean): Promise<void> {
+    await setPullRequestDraft(this.deps.client, this.loaded().details.id, draft);
+    await this.resync();
+  }
+
+  reviewerOptions(query: string): Promise<ReviewerOptions> {
+    return fetchReviewerOptions(this.deps.client, this.ref, query);
+  }
+
+  async changeReviewRequests(add: string[], remove: string[]): Promise<void> {
+    await changeReviewRequests(this.deps.client, this.ref, this.loaded().details.id, add, remove);
+    await this.resync();
   }
 
   async requestReviews(logins: string[]): Promise<void> {

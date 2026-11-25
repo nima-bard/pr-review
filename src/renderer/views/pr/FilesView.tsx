@@ -12,27 +12,36 @@ import { api } from '../../api';
 import { appendToSummary, closeContentTab, closeContentTabs, getPrUi, moveContentTab, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
 import { MARKER_CLASS, useTabReorder } from '../../components/useTabReorder';
 import { FileIcon } from '../../components/fileIcons';
+import { fileMenuItems, runFileAction } from '../../components/fileMenu';
 import { useDiffAppearance } from '../../state/settings';
 import { useFocusLine } from '../../diff/useFocusLine';
 import { useSearchHighlights } from '../../diff/useSearchHighlights';
+import { useFindInView } from '../../diff/useFindInView';
+import { FindBar } from './FindBar';
 import { ConversationsPanel } from './ConversationsPanel';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
 
-async function showTabMenu(key: string, id: string): Promise<void> {
+async function showTabMenu(snapshot: PrSnapshot, id: string): Promise<void> {
+  const key = snapshot.key;
   const tabs = getPrUi(key).contentTabs;
   const index = tabs.findIndex((t) => t.id === id);
   const files = tabs.filter((t) => t.kind === 'file').map((t) => t.id);
   const others = files.filter((f) => f !== id);
   const right = tabs.slice(index + 1).filter((t) => t.kind === 'file').map((t) => t.id);
   const isFile = tabs[index]?.kind === 'file';
+  const tab = tabs[index];
+  // A file tab also gets the file's actions (it shows the whole file already).
+  const fileItems = tab?.kind === 'file' ? ['separator' as const, ...fileMenuItems(snapshot, tab.path, { whole: false })] : [];
   const choice = await api.contextMenu([
     { id: 'close', label: 'Close', enabled: isFile },
     { id: 'others', label: 'Close Others', enabled: others.length > 0 },
     { id: 'right', label: 'Close to the Right', enabled: right.length > 0 },
     'separator',
     { id: 'all', label: 'Close All', enabled: files.length > 0 },
+    ...fileItems,
   ]);
+  if (tab?.kind === 'file' && (await runFileAction(snapshot, tab.path, choice))) return;
   if (choice === 'close') closeContentTab(key, id);
   if (choice === 'others') closeContentTabs(key, others, id);
   if (choice === 'right') closeContentTabs(key, right, id);
@@ -58,7 +67,7 @@ function ContentTabs({ snapshot }: { snapshot: PrSnapshot }) {
             }}
             onContextMenu={(e) => {
               e.preventDefault();
-              void showTabMenu(snapshot.key, t.id);
+              void showTabMenu(snapshot, t.id);
             }}
             className={cx(
               'relative flex items-center border-r border-line',
@@ -302,19 +311,23 @@ function Content({ snapshot, active }: { snapshot: PrSnapshot; active: boolean }
   const scroller = useRef<HTMLDivElement | null>(null);
   // The search text is marked in the code on screen, while the search sidebar has a query.
   useSearchHighlights(scroller, snapshot.key, active);
+  const found = useFindInView(scroller, snapshot.key, active);
   const tab = ui.contentTabs.find((t) => t.id === ui.activeContent) ?? ui.contentTabs[0]!;
   const changed = tab.kind === 'file' ? snapshot.files.find((f) => f.path === tab.path) : undefined;
   return (
     <div className="h-full flex flex-col min-w-0">
       <ContentTabs snapshot={snapshot} />
-      <div ref={scroller} className="flex-1 overflow-y-auto">
-        {tab.kind === 'changes' && <AllChanges snapshot={snapshot} />}
-        {tab.kind === 'file' && changed && (
-          <div className="p-4">
-            <FullFileDiff snapshot={snapshot} file={changed} />
-          </div>
-        )}
-        {tab.kind === 'file' && !changed && <ReadOnlyFile snapshot={snapshot} path={tab.path} />}
+      <div className="relative flex-1 min-h-0">
+        <FindBar snapshot={snapshot} count={found.count} current={found.current} allChanges={tab.kind === 'changes'} />
+        <div ref={scroller} className="h-full overflow-y-auto">
+          {tab.kind === 'changes' && <AllChanges snapshot={snapshot} />}
+          {tab.kind === 'file' && changed && (
+            <div className="p-4">
+              <FullFileDiff snapshot={snapshot} file={changed} />
+            </div>
+          )}
+          {tab.kind === 'file' && !changed && <ReadOnlyFile snapshot={snapshot} path={tab.path} />}
+        </div>
       </div>
     </div>
   );
@@ -356,7 +369,14 @@ function Sidebar({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
-const SEPARATOR = 'w-px bg-line hover:bg-accent data-[separator=active]:bg-accent transition-colors';
+/**
+ * The splitter is its own 7px strip between the panels (drawing a 1px line), and the whole of its grab area: the
+ * library's default widens a thin splitter's grab area by a few pixels on each side, over the neighbouring panels'
+ * scrollbars. There the cursor promised a resize, but pressing it scrolled the panel.
+ */
+const SEPARATOR =
+  'relative w-[7px] flex-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-line before:transition-colors hover:before:bg-accent data-[separator=active]:before:bg-accent';
+const GRAB_AREA = { coarse: 20, fine: 7 };
 
 function CheatSheet({ onClose }: { onClose(): void }) {
   return (
@@ -396,7 +416,7 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
   return (
     <>
     {help && <CheatSheet onClose={() => setHelp(false)} />}
-    <Group orientation="horizontal" className="h-full" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+    <Group orientation="horizontal" className="h-full" resizeTargetMinimumSize={GRAB_AREA} defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
       {ui.showTree && (
         <>
           <Panel id="tree" defaultSize="22" minSize={200} maxSize="45">

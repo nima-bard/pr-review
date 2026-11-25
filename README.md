@@ -14,10 +14,13 @@ PR Review opens each pull request in a git worktree of a clone you already have,
 - **Drafts stay local** until you submit them as one review: comment, approve or request changes.
 - **Find in files** (⇧⌘F), like VS Code: match case, whole word, regular expressions, files to include or exclude, results as a list or a tree.
 - **Triage.** See which threads wait for your reply and which look addressed by later changes.
+- **Act on it.** Merge with GitHub's rules and proposed commit message, request reviewers, close or reopen, switch between draft and ready.
+- **Quick actions:** your own commands for a pull request (say, `claude "/code-review $PR_NUMBER"` or `npm test`), run in its worktree, in iTerm2 or another terminal, or in the background.
+- **Find** in the current view (⌘F), in both versions of a diff or one.
 - **Tabs** for several pull requests (drag to reorder, pop out into windows), restored when you restart.
 - **Stays current.** The open pull request is checked for new pushes, comments and reviews every 45 seconds.
 - **Themes**: GitHub Dark, Light and High Contrast, and Slate; any of Shiki's code themes; your choice of fonts and sizes.
-- **Opens GitHub links** (optional): a Chrome extension hands pull request links to the app, the way Zoom links open Zoom.
+- **Opens GitHub links** (optional): a browser extension for Chrome or Edge opens GitHub pull request links in the app.
 
 ## Install
 
@@ -34,11 +37,16 @@ You need a Mac with Apple silicon, **git**, and ideally the **GitHub CLI** signe
 
 PR Review uses your GitHub CLI login: if `gh auth status` shows you're signed in, there's nothing to do. Without the GitHub CLI you can sign in with your own [GitHub OAuth app](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) that has device flow enabled; paste its client ID in the setup or in Settings. That token is saved encrypted, with a key kept in your macOS keychain.
 
-### Opening pull requests from GitHub (Chrome)
+### Opening pull requests from GitHub (Chrome, Edge)
 
-Load the extension once: open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick the extension folder. The app shows you where it is: Settings › Open pull requests from GitHub › **Show extension folder**. Every release also has it as a zip.
+Load the extension once:
 
-From then on, GitHub pull request links open in PR Review, whether you click them on github.com or open them from Slack, Mail or anywhere else. Chrome asks "Open PR Review?" the first time; tick "Always allow". The extension's toolbar button turns automatic opening on or off, for all repositories or one at a time, and there's an **Open in PR Review** button on pull request pages.
+1. Open `chrome://extensions` (in Edge, `edge://extensions`) and turn on **Developer mode**.
+2. Drag the extension folder onto that page. Or click **Load unpacked** and pick the folder; it's inside the app, so press ⇧⌘G in the picker and paste its path.
+
+Settings › Open pull requests from GitHub shows the folder's path, with **Copy path** and **Show in Finder**, and opens the extensions page for you. Every release also has the extension as a zip.
+
+From then on, GitHub pull request links open in PR Review, whether you click them on github.com or open them from Slack, Mail or anywhere else. The browser asks "Open PR Review?" the first time; tick "Always allow". The extension's toolbar button turns automatic opening on or off, for all repositories or one at a time, and there's an **Open in PR Review** button on pull request pages.
 
 ## Privacy
 
@@ -62,8 +70,8 @@ Useful when testing: `PR_REVIEW_USER_DATA=<folder>` runs with a separate profile
 
 ## Releasing
 
-1. Raise `version` in `package.json`, commit and push.
-2. Run `npm run release:publish`. It typechecks, runs the tests, builds `pr-review-<version>-arm64.dmg`, zips the browser extension, writes `SHA256SUMS.txt` (all in `dist/release-<version>/`) and creates a **draft** GitHub release `v<version>` with those files and install notes.
+1. Raise `version` in `package.json`, add what changed to `CHANGELOG.md`, commit and push.
+2. Run `npm run release:publish`. It typechecks, runs the tests, builds `pr-review-<version>-arm64.dmg`, zips the browser extension, writes `SHA256SUMS.txt` (all in `dist/release-<version>/`) and creates a **draft** GitHub release `v<version>` with those files, that version's changelog and install notes.
 3. Look over the draft on GitHub and publish it.
 
 `npm run release` builds the same files without creating a release.

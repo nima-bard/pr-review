@@ -186,6 +186,76 @@ export interface PrDetails {
   checks: CheckRun[];
   linkedIssues: { number: number; title: string; url: string }[];
   workItems: string[];
+  mergedAt: string | null;
+  mergedBy: string | null;
+  /** What the viewer may do with the pull request on GitHub (merge: write access to the repository). */
+  viewerCan: { merge: boolean; close: boolean; reopen: boolean; update: boolean };
+}
+
+export type MergeMethod = 'MERGE' | 'SQUASH' | 'REBASE';
+
+export interface CommitMessage {
+  headline: string;
+  body: string;
+}
+
+/**
+ * What merging takes, as github.com's merge box sees it: the repository's merge settings, the state of the branch's
+ * rules (required checks and reviews, conflicts, an out-of-date branch) and the commit messages GitHub proposes.
+ */
+export interface MergeInfo {
+  state: PrDetails['state'];
+  isDraft: boolean;
+  headRefOid: string;
+  headRefName: string;
+  baseRefName: string;
+  /** The methods the repository allows, and the one the viewer last used there. */
+  methods: MergeMethod[];
+  defaultMethod: MergeMethod;
+  /** GitHub's proposed commit for each method that makes one (a rebase keeps the commits as they are). */
+  messages: Record<'MERGE' | 'SQUASH', CommitMessage>;
+  /** The address the merge commit is authored with. */
+  authorEmail: string | null;
+  mergeable: PrDetails['mergeable'];
+  mergeStateStatus: string;
+  reviewDecision: PrDetails['reviewDecision'];
+  checks: (CheckRun & { required: boolean })[];
+  /** Write access to the repository. */
+  canMerge: boolean;
+  /** May merge before the rules are met (an administrator, or allowed to bypass the rules). */
+  canBypass: boolean;
+  autoMerge: { available: boolean; enabled: { method: MergeMethod; by: string | null } | null; canDisable: boolean };
+  mergeQueue: { enabled: boolean; queued: boolean };
+  canUpdateBranch: boolean;
+  /** The head branch after the merge: GitHub deletes it (a repository setting), the viewer may, or neither. */
+  deleteBranch: 'automatic' | 'optional' | 'no';
+}
+
+export interface MergeInput {
+  /** Merge now, merge automatically once the rules are met, or add it to the merge queue. */
+  action: 'merge' | 'auto-merge' | 'queue';
+  method: MergeMethod;
+  /** Null for a rebase. */
+  message: CommitMessage | null;
+  deleteBranch: boolean;
+}
+
+export interface ReviewerCandidate {
+  /** A user's login, or a team as "org/slug". */
+  id: string;
+  kind: 'user' | 'team';
+  name: string | null;
+  avatarUrl: string | null;
+  /** Why GitHub suggests them. */
+  reason: string | null;
+}
+
+export interface ReviewerOptions {
+  suggestions: ReviewerCandidate[];
+  users: ReviewerCandidate[];
+  teams: ReviewerCandidate[];
+  /** Ids (as in `ReviewerCandidate`) with a review requested now. */
+  requested: string[];
 }
 
 export interface ConversationItem {
@@ -215,6 +285,23 @@ export interface WorktreeInfo {
   owned: boolean;
   prNumber: number | null;
   isPrimary: boolean;
+}
+
+/** Where the browser extension is, and the installed browsers' extensions pages ("chrome://extensions"). */
+export interface BrowserExtensionInfo {
+  path: string;
+  browsers: { name: string; page: string }[];
+}
+
+/** This version against the latest GitHub release. */
+export interface UpdateInfo {
+  current: string;
+  /** The latest release's version, or null when there's none (or the check failed). */
+  latest: string | null;
+  available: boolean;
+  /** The release page, to download it from. */
+  url: string | null;
+  error: string | null;
 }
 
 /** What the first-run setup finds on this machine. */
@@ -292,12 +379,28 @@ export type OpenPrResult =
   | { ok: true; key: string }
   | { ok: false; reason: 'bad-input' | 'no-clone' | 'error'; message: string; ref?: PrRef };
 
+/**
+ * A pull request while it first loads: its details from GitHub, and its conversation once that's fetched. The app
+ * shows it (the Overview) until the snapshot is ready, since the git side (fetching, the worktree, the diff) takes longer.
+ */
+export interface PrPreview {
+  key: string;
+  ref: PrRef;
+  role: Role;
+  viewer: string;
+  details: PrDetails;
+  conversation: ConversationItem[] | null;
+}
+
 export type PrEvent =
   | { type: 'snapshot'; key: string; snapshot: PrSnapshot }
+  | { type: 'preview'; key: string; preview: PrPreview }
   | { type: 'progress'; key: string; message: string }
   | { type: 'error'; key: string; message: string }
   /** The periodic check found nothing new (a change triggers a refresh, and with it a snapshot). */
-  | { type: 'checked'; key: string; at: string };
+  | { type: 'checked'; key: string; at: string }
+  /** A background quick action started, printed something or finished. */
+  | { type: 'action'; key: string; run: ActionRun };
 
 export interface SubmitInput {
   event: ReviewEvent;
@@ -391,6 +494,44 @@ export interface Settings {
   uiFont: string;
   /** Google Fonts family for code; empty uses the bundled JetBrains Mono. */
   codeFont: string;
+  /** Commands to run on a pull request or one of its files (see `QuickAction`). */
+  quickActions: QuickAction[];
+  /** The terminal app quick actions open in, an id from TERMINALS; empty picks the first one installed. */
+  terminalApp: string;
+}
+
+/**
+ * A command the viewer runs on a pull request (its Actions menu) or on one of its files (the file's menu): in the PR's
+ * worktree, with the PR's details in environment variables (`PR_NUMBER`, `PR_URL`, `PR_FILE`… see shared/quickActions.ts).
+ */
+export interface QuickAction {
+  id: string;
+  name: string;
+  /** Run by the login shell; empty (in a terminal) just opens one in the worktree. */
+  command: string;
+  /** In a new terminal window or tab, or in the background with its output in the app. */
+  mode: 'terminal' | 'background';
+  scope: 'pr' | 'file';
+  /** The repositories it's offered for: "owner/repo" or "owner/*", separated by commas or spaces; empty for all. */
+  repos: string;
+  /** Ask before it runs. */
+  confirm: boolean;
+}
+
+/** A quick action running (or run) in the background. */
+export interface ActionRun {
+  id: string;
+  actionId: string;
+  name: string;
+  command: string;
+  /** The file it ran on, for a file action. */
+  file: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: 'running' | 'succeeded' | 'failed' | 'stopped';
+  exitCode: number | null;
+  /** Its output, stdout and stderr together; the last 200,000 characters. */
+  output: string;
 }
 
 export interface AuthStatus {

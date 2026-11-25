@@ -7,6 +7,8 @@ import { Badge, Button, cx, Icon, Spinner } from '../components/ui';
 import { openFileTab, requestComposer, updateUi, usePrefs, usePrUi, type ComposerTarget } from '../state/ui';
 import { unsentKey } from '../state/unsent';
 import { FileIcon } from '../components/fileIcons';
+import { showFileMenu } from '../components/fileMenu';
+import { Octicon } from '../components/octicons';
 import { useDiffAppearance } from '../state/settings';
 import { Composer, DraftCard } from './Composer';
 import { ThreadCard } from './ThreadCard';
@@ -273,7 +275,12 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
           {changeLetter(file.change)}
         </span>
         <FileIcon path={file.path} />
-        <span className="font-mono text-[12.5px] text-muted min-w-0 truncate">
+        {/* ⌘-click the name: the whole file in its own tab. */}
+        <span
+          className="font-mono text-[12.5px] text-muted min-w-0 truncate"
+          title={`${file.path} (⌘-click to open in a tab)`}
+          onClick={(e) => e.metaKey && openFileTab(key, file.path, true, false)}
+        >
           {file.oldPath && file.oldPath !== file.path && <span className="text-faint">{file.oldPath} → </span>}
           {dir}
           <strong className="text-strong font-semibold">{name}</strong>
@@ -285,9 +292,15 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
         {file.viewed === 'DISMISSED' && <Badge tone="warn">Changed since viewed</Badge>}
         <span className="flex-1" />
         {threadCount > 0 && <span className="text-muted text-[12px]">{threadCount} threads</span>}
-        <Button size="sm" onClick={() => openFileTab(key, file.path, true, false)}>
-          Open file
-        </Button>
+        <button
+          type="button"
+          aria-label={`Actions for ${file.path}`}
+          title="Show whole file, open in editor, view on GitHub, copy path…"
+          onClick={() => void showFileMenu(snapshot, file.path)}
+          className="grid place-items-center w-[26px] h-[26px] rounded-md border border-line-2 bg-raised-2 text-muted hover:text-fg cursor-pointer"
+        >
+          <Octicon name="kebab-horizontal" size={14} />
+        </button>
         <label className={cx('flex items-center gap-1.5 h-[26px] px-2.5 rounded-md border text-[12px] cursor-pointer', viewed ? 'bg-info-bg border-info-line' : 'bg-raised-2 border-line-2')}>
           <input
             type="checkbox"

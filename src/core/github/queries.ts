@@ -33,6 +33,7 @@ export interface PrSummaryResponse {
 export const PR_DETAILS = /* GraphQL */ `
   query ($owner: String!, $repo: String!, $pr: Int!) {
     repository(owner: $owner, name: $repo) {
+      viewerPermission
       pullRequest(number: $pr) {
         id
         number
@@ -40,6 +41,13 @@ export const PR_DETAILS = /* GraphQL */ `
         url
         state
         isDraft
+        mergedAt
+        mergedBy {
+          login
+        }
+        viewerCanClose
+        viewerCanReopen
+        viewerCanUpdate
         createdAt
         updatedAt
         body
@@ -140,8 +148,8 @@ export interface Actor {
 }
 
 export type CheckContextNode =
-  | { __typename: 'CheckRun'; name: string; conclusion: string | null; status: string; detailsUrl: string | null }
-  | { __typename: 'StatusContext'; context: string; state: string; targetUrl: string | null };
+  | { __typename: 'CheckRun'; name: string; conclusion: string | null; status: string; detailsUrl: string | null; isRequired?: boolean }
+  | { __typename: 'StatusContext'; context: string; state: string; targetUrl: string | null; isRequired?: boolean };
 
 export interface PrDetailsNode {
   id: string;
@@ -150,6 +158,11 @@ export interface PrDetailsNode {
   url: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   isDraft: boolean;
+  mergedAt: string | null;
+  mergedBy: { login: string } | null;
+  viewerCanClose?: boolean;
+  viewerCanReopen?: boolean;
+  viewerCanUpdate?: boolean;
   createdAt: string;
   updatedAt: string;
   body: string;
@@ -180,7 +193,7 @@ export interface PrDetailsNode {
 }
 
 export interface PrDetailsResponse {
-  repository: { pullRequest: PrDetailsNode | null } | null;
+  repository: { viewerPermission?: string | null; pullRequest: PrDetailsNode | null } | null;
 }
 
 const REACTION_FIELDS = /* GraphQL */ `

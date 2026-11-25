@@ -1,7 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
+import { execFile } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fixPath } from '../core/env';
 import { markStay, prFromAppUrl } from '../shared/prInput';
+import { checkForUpdate, currentVersion } from './updates';
 import { appTheme, DEFAULT_APP_THEME } from '../shared/themes';
 import { registerIpc } from './ipc';
 import { SessionRegistry, userDataSubdir } from './sessions';
@@ -31,6 +34,32 @@ let started = false;
 const mainWindow = () => BrowserWindow.getAllWindows().find((w) => !popOuts.has(w));
 
 /** The Chrome extension's folder: shipped next to the app's resources, or in the repo when running from source. */
+/** Chromium browsers that can load the unpacked extension, and their extensions page. */
+const BROWSERS = [
+  { name: 'Chrome', app: 'Google Chrome', page: 'chrome://extensions' },
+  { name: 'Edge', app: 'Microsoft Edge', page: 'edge://extensions' },
+  { name: 'Brave', app: 'Brave Browser', page: 'brave://extensions' },
+];
+
+async function installedBrowsers(): Promise<{ name: string; page: string }[]> {
+  const found = [];
+  for (const b of BROWSERS) {
+    const paths = [join('/Applications', `${b.app}.app`), join(app.getPath('home'), 'Applications', `${b.app}.app`)];
+    if ((await Promise.all(paths.map((p) => stat(p).then(() => true, () => false)))).some(Boolean)) found.push({ name: b.name, page: b.page });
+  }
+  return found;
+}
+
+/**
+ * Asks the browser to open its extensions page. Other apps can't open chrome:// addresses themselves, and a browser
+ * may still ignore one handed to it, so the page also copies the address for pasting.
+ */
+function openExtensionsPage(page: string): Promise<boolean> {
+  const browser = BROWSERS.find((b) => b.page === page);
+  if (!browser) return Promise.resolve(false);
+  return new Promise((resolve) => execFile('open', ['-a', browser.app, page], (err) => resolve(!err)));
+}
+
 function browserExtensionDir(): string {
   // From source the main bundle is out/main/index.js, two levels below the repo.
   return app.isPackaged ? join(process.resourcesPath, 'browser-extension') : join(import.meta.dirname, '../../browser-extension');
@@ -116,6 +145,21 @@ app.on('open-url', (event, url) => {
   else void app.whenReady().then(() => openFromUrl(url));
 });
 
+/** The menu's "Check for Updates…": the answer as a dialog, with a way to the download when there's a newer version. */
+async function checkForUpdatesNow(): Promise<void> {
+  const info = await checkForUpdate();
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const show = (options: Electron.MessageBoxOptions) => (parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options));
+  if (info.error) {
+    await show({ type: 'warning', message: "Couldn't check for updates", detail: info.error });
+  } else if (info.available && info.url) {
+    const { response } = await show({ type: 'info', message: `PR Review ${info.latest} is available`, detail: `You have ${info.current}.`, buttons: ['Download', 'Later'], defaultId: 0, cancelId: 1 });
+    if (response === 0) await shell.openExternal(info.url);
+  } else {
+    await show({ type: 'info', message: "You're up to date", detail: `PR Review ${info.current} is the latest version.` });
+  }
+}
+
 function buildMenu(): void {
   const send = (channel: string) => () => (BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.webContents.send('menu', channel);
   Menu.setApplicationMenu(
@@ -124,6 +168,7 @@ function buildMenu(): void {
         label: app.name,
         submenu: [
           { role: 'about' },
+          { label: 'Check for Updates…', click: () => void checkForUpdatesNow() },
           { type: 'separator' },
           { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('settings') },
           { type: 'separator' },
@@ -145,7 +190,22 @@ function buildMenu(): void {
           { label: 'Refresh Pull Request', accelerator: 'CmdOrCtrl+R', click: send('refresh') },
         ],
       },
-      { role: 'editMenu' },
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' },
+          { type: 'separator' },
+          { label: 'Find', accelerator: 'CmdOrCtrl+F', click: send('find') },
+          { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: send('find-next') },
+          { label: 'Find Previous', accelerator: 'Shift+CmdOrCtrl+G', click: send('find-previous') },
+        ],
+      },
       {
         label: 'View',
         submenu: [
@@ -183,21 +243,42 @@ void app.whenReady().then(async () => {
       if (url.startsWith('https://')) await shell.openExternal(markStay(url));
     },
     revealBrowserExtension: () => shell.showItemInFolder(browserExtensionDir()),
+    browserExtensionInfo: async () => ({ path: browserExtensionDir(), browsers: await installedBrowsers() }),
+    openExtensionsPage,
+    showItemInFolder: (path) => shell.showItemInFolder(path),
     popOut: (key) => {
       createWindow(key);
     },
     contextMenu: (items) =>
       new Promise((resolve) => {
         const menu = Menu.buildFromTemplate(
-          items.map((item) => (item === 'separator' ? { type: 'separator' as const } : { label: item.label, enabled: item.enabled ?? true, click: () => resolve(item.id) })),
+          items.map((item) =>
+            item === 'separator'
+              ? { type: 'separator' as const }
+              : { label: item.label, enabled: item.enabled ?? true, accelerator: item.accelerator, registerAccelerator: false, click: () => resolve(item.id) },
+          ),
         );
         // On macOS the close callback can run before the item's click handler, so give the click a moment to win.
         menu.popup({ window: BrowserWindow.getFocusedWindow() ?? undefined, callback: () => setTimeout(() => resolve(null), 100) });
       }),
     applyAppTheme,
+    confirm: async (message, detail, button) => {
+      const parent = BrowserWindow.getFocusedWindow();
+      const options: Electron.MessageBoxOptions = { type: 'question', message, detail, buttons: [button, 'Cancel'], defaultId: 0, cancelId: 1 };
+      const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+      return response === 0;
+    },
+    notify: (title, body, url) => {
+      // In the app, the status bar shows it.
+      if (BrowserWindow.getFocusedWindow() || !Notification.isSupported()) return;
+      const note = new Notification({ title, body });
+      note.on('click', () => openFromUrl(`prreview://open?pr=${encodeURIComponent(url)}`));
+      note.show();
+    },
   });
   applyAppTheme((await registry.appState.settings()).appTheme);
   registerIpc(registry.api());
+  app.setAboutPanelOptions({ applicationName: 'PR Review', applicationVersion: currentVersion() });
   buildMenu();
   createWindow();
   started = true;
@@ -210,4 +291,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => registry?.disposeAll());
+app.on('before-quit', () => {
+  registry?.stopActions();
+  registry?.disposeAll();
+});

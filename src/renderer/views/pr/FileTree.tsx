@@ -3,6 +3,7 @@ import type { Draft, FileEntry, PrSnapshot, ThreadView } from '../../../shared/m
 import { api } from '../../api';
 import { changeColor, changeLetter, commentedPaths, strayThreads, threadsForFile } from '../../diff/FileSection';
 import { FileIcon, FolderIcon } from '../../components/fileIcons';
+import { showFileMenu } from '../../components/fileMenu';
 import { cx, Icon, Segmented } from '../../components/ui';
 import { focusFile, openFileTab, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
 import { closestInTree, foldersOf } from './treeOrder';
@@ -279,6 +280,10 @@ export function FileTree({ snapshot }: { snapshot: PrSnapshot }) {
               <div
                 key={`f:${r.path}`}
                 data-tree-file={r.path}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  void showFileMenu(snapshot, r.path);
+                }}
                 className={cx('relative flex items-center gap-2 h-6 pr-2.5 text-[12.5px] transition-colors duration-500', active || flash === r.path ? 'bg-active' : 'hover:bg-hover')}
                 style={indent}
               >
@@ -299,7 +304,9 @@ export function FileTree({ snapshot }: { snapshot: PrSnapshot }) {
                   )}
                   <button
                     type="button"
-                    onClick={() => (e || r.stray ? focusFile(key, r.path) : openFileTab(key, r.path, false, true))}
+                    // ⌘-click: the file in its own (kept) tab; a click shows a changed file in All changes, any other in a preview tab.
+                    onClick={(ev) => (ev.metaKey ? openFileTab(key, r.path, !!e, false) : e || r.stray ? focusFile(key, r.path) : openFileTab(key, r.path, false, true))}
+                    title={`${r.path} (⌘-click to open in a tab)`}
                     onDoubleClick={() => openFileTab(key, r.path, !!e, false)}
                     className="flex items-center min-w-0 flex-1 h-full text-left cursor-pointer"
                   >

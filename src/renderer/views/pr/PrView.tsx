@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react';
-import type { PrSnapshot } from '../../../shared/model';
-import { api } from '../../api';
+import type { PrPreview, PrSnapshot } from '../../../shared/model';
+import { api, errorText } from '../../api';
 import { retryPr } from '../../state/tabs';
-import { PrStatePill } from '../../components/octicons';
-import { Badge, Button, ErrorBox, Icon, Segmented, shortSha, Spinner, timeAgo } from '../../components/ui';
+import { Octicon, PrStatePill } from '../../components/octicons';
+import { Badge, Button, ErrorBox, Icon, Segmented, shortSha, Skeleton, Spinner, timeAgo } from '../../components/ui';
+import { MergeDialog } from '../../dialogs/MergeDialog';
 import { SubmitReviewDialog } from '../../dialogs/SubmitReviewDialog';
 import { showChanges, VersionsDialog } from '../../dialogs/VersionsDialog';
-import { useSessions } from '../../state/sessions';
+import { setSessionError, useSessions } from '../../state/sessions';
 import { updateUi, usePrUi, type PrViewKind } from '../../state/ui';
 import { CommitsView } from './CommitsView';
+import { RunsDialog, RunsIndicator } from './ActionRuns';
+import { showActionsMenu } from '../../state/quickActions';
 import { FilesView } from './FilesView';
 import { Overview } from './Overview';
 
 /** GitHub's state pill, plus the review decision when it says more than "review required". */
-function StateBadge({ snapshot }: { snapshot: PrSnapshot }) {
-  const d = snapshot.details;
+function StateBadge({ pr }: { pr: PrPreview }) {
+  const d = pr.details;
   const open = d.state === 'OPEN' && !d.isDraft;
   return (
     <>
@@ -42,48 +45,70 @@ function sinceLastReview(snapshot: PrSnapshot): { text: string; action: string; 
   };
 }
 
-function Header({ snapshot, view }: { snapshot: PrSnapshot; view: PrViewKind }) {
+/** In place of a view's count while the PR first loads. */
+function Pending() {
+  return <span role="img" aria-label="loading" title="Loading: the pull request is being checked out" className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" />;
+}
+
+/** Merge… (the merge dialog), or for a draft: Ready for review. */
+function MergeButton({ snapshot }: { snapshot: PrSnapshot }) {
+  const [busy, setBusy] = useState(false);
   const key = snapshot.key;
+  if (!snapshot.details.isDraft) {
+    return (
+      <Button onClick={() => updateUi(key, { showMerge: true })} title="Merge this pull request: the branch's rules, the merge method and the commit message">
+        <Octicon name="git-merge" size={14} className="text-done" />
+        Merge…
+      </Button>
+    );
+  }
+  return (
+    <Button
+      disabled={busy}
+      title="Mark the draft as ready for review: reviewers are notified, and it can be merged"
+      onClick={() => {
+        setBusy(true);
+        api
+          .setPrDraft(key, false)
+          .catch((err: unknown) => setSessionError(key, errorText(err)))
+          .finally(() => setBusy(false));
+      }}
+    >
+      {busy ? 'Marking ready…' : 'Ready for review'}
+    </Button>
+  );
+}
+
+/** `snapshot` is undefined while the PR first loads: then only `pr` (a preview) is known. */
+function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | undefined; view: PrViewKind }) {
+  const key = pr.key;
   const ui = usePrUi(key);
-  const d = snapshot.details;
-  const since = sinceLastReview(snapshot);
+  const d = pr.details;
+  const since = snapshot ? sinceLastReview(snapshot) : null;
+  const count = (n: number | undefined) => (n === undefined ? <Pending /> : <span className="px-1.5 rounded-full bg-chip text-[11px]">{n}</span>);
   const views: { value: PrViewKind; label: React.ReactNode }[] = [
     { value: 'overview', label: 'Overview' },
-    {
-      value: 'files',
-      label: (
-        <>
-          Files <span className="px-1.5 rounded-full bg-chip text-[11px]">{snapshot.files.length}</span>
-        </>
-      ),
-    },
-    {
-      value: 'commits',
-      label: (
-        <>
-          Commits <span className="px-1.5 rounded-full bg-chip text-[11px]">{d.commitCount}</span>
-        </>
-      ),
-    },
+    { value: 'files', label: <>Files {count(snapshot?.files.length)}</> },
+    { value: 'commits', label: <>Commits {count(snapshot && d.commitCount)}</> },
   ];
   return (
     <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
       <div className="flex-[1_1_220px] min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <StateBadge snapshot={snapshot} />
+          <StateBadge pr={pr} />
           <h1 className="text-[15px] font-semibold text-strong truncate min-w-0" title={d.title}>
             {d.title}
           </h1>
           <span className="text-faint text-[14px] flex-none">#{d.number}</span>
         </div>
         <div className="mt-1 text-muted text-[12px] truncate">
-          <strong className="text-fg font-semibold">{snapshot.role === 'author' ? 'You' : d.author}</strong> {snapshot.role === 'author' ? 'want' : 'wants'} to merge{' '}
+          <strong className="text-fg font-semibold">{pr.role === 'author' ? 'You' : d.author}</strong> {pr.role === 'author' ? 'want' : 'wants'} to merge{' '}
           <code className="font-mono text-[11.5px] px-1.5 rounded bg-branch-bg text-branch">{d.headRefName}</code> into{' '}
           <code className="font-mono text-[11.5px] px-1.5 rounded bg-branch-bg text-branch">{d.baseRefName}</code> · <span className="text-add">+{d.additions}</span> <span className="text-del">−{d.deletions}</span>
         </div>
       </div>
       <Segmented label="PR views" value={view} onChange={(v) => updateUi(key, { view: v })} options={views} />
-      {view === 'files' && (
+      {view === 'files' && snapshot && (
         <>
           <Button onClick={() => updateUi(key, { showVersions: true })}>
             <span className="text-muted">Changes</span>
@@ -111,9 +136,17 @@ function Header({ snapshot, view }: { snapshot: PrSnapshot; view: PrViewKind }) 
           </Button>
         </>
       )}
-      <Button variant="primary" onClick={() => updateUi(key, { showSubmit: true })}>
+      {/* The pull request's own actions are on the Overview; ⌥⌘1–9 run quick actions from anywhere. */}
+      {snapshot && view === 'overview' && (
+        <Button onClick={() => void showActionsMenu(snapshot)} title="Quick actions: your own commands for this pull request (⌥⌘1–9). Set them up in Settings.">
+          <Octicon name="zap" size={14} className="text-warn" />
+          Actions
+        </Button>
+      )}
+      {snapshot && view === 'overview' && d.state === 'OPEN' && (d.isDraft ? d.viewerCan.update : d.viewerCan.merge) && <MergeButton snapshot={snapshot} />}
+      <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
         Submit review
-        {snapshot.drafts.length > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{snapshot.drafts.length} draft{snapshot.drafts.length === 1 ? '' : 's'}</span>}
+        {snapshot && snapshot.drafts.length > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{snapshot.drafts.length} draft{snapshot.drafts.length === 1 ? '' : 's'}</span>}
       </Button>
     </div>
   );
@@ -137,6 +170,11 @@ function SyncStatus({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
+function SpinnerLabel({ prKey }: { prKey: string }) {
+  const progress = useSessions((s) => s.progress[prKey]);
+  return <Spinner label={progress ?? 'Loading…'} />;
+}
+
 function StatusBar({ snapshot }: { snapshot: PrSnapshot }) {
   const progress = useSessions((s) => s.progress[snapshot.key]);
   const since = sinceLastReview(snapshot);
@@ -155,6 +193,7 @@ function StatusBar({ snapshot }: { snapshot: PrSnapshot }) {
         merge-base <span className="font-mono text-fg">{shortSha(snapshot.mergeBase)}</span> on {snapshot.details.baseRefName}
       </span>
       <span className="flex-1" />
+      <RunsIndicator prKey={snapshot.key} />
       {since && (
         <span className="text-warn" title={since.tooltip}>
           {since.text}
@@ -168,13 +207,65 @@ function StatusBar({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
+/** Files or Commits before the PR's first snapshot: their shape, and what the app is doing (fetching, checking out…). */
+function NotYet({ prKey, view }: { prKey: string; view: 'files' | 'commits' }) {
+  const progress = useSessions((s) => s.progress[prKey]);
+  const status = (
+    <div className="flex flex-col gap-1">
+      <Spinner label={progress ?? 'Loading…'} />
+      <span className="pl-5.5 text-[12px] text-muted">{view === 'files' ? 'The files' : 'The commits'} show once the pull request is checked out.</span>
+    </div>
+  );
+  if (view === 'commits') {
+    return (
+      <div className="h-full overflow-hidden px-5 py-4">
+        <div className="max-w-[1000px] mx-auto flex flex-col gap-3">
+          {status}
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[52px] rounded-[10px]" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+  const rows = ['w-2/3', 'ml-4 w-1/2', 'ml-4 w-3/5', 'w-1/2', 'ml-4 w-2/3', 'ml-8 w-2/5', 'w-3/5'];
+  return (
+    <div className="h-full flex overflow-hidden">
+      <div className="w-[300px] flex-none flex flex-col gap-3 p-3 bg-side border-r border-line">
+        <Skeleton className="h-[26px]" />
+        <Skeleton className="h-[26px]" />
+        {rows.map((w, i) => (
+          <Skeleton key={i} className={`h-3 ${w}`} />
+        ))}
+      </div>
+      <div className="flex-1 min-w-0 flex flex-col gap-4 p-4">
+        {status}
+        {[0, 1].map((i) => (
+          <div key={i} aria-hidden="true" className="rounded-[10px] border border-line-2 overflow-hidden">
+            <div className="flex items-center gap-2 h-10 px-3 bg-subtle border-b border-line">
+              <Skeleton className="w-48 h-3" />
+            </div>
+            <div className="flex flex-col gap-2.5 p-3">
+              {['w-1/2', 'w-2/3', 'w-5/12', 'w-3/4', 'w-1/3'].map((w, j) => (
+                <Skeleton key={j} className={`h-3 ${w}`} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   const snapshot = useSessions((s) => s.snapshots[prKey]);
+  const preview = useSessions((s) => s.previews[prKey]);
   const progress = useSessions((s) => s.progress[prKey]);
   const error = useSessions((s) => s.errors[prKey]);
   const ui = usePrUi(prKey);
 
-  if (!snapshot) {
+  const pr = snapshot ?? preview;
+  if (!pr) {
     return (
       <div className="h-full grid place-items-center p-6">
         <div className="flex flex-col gap-3 items-center max-w-[560px]">
@@ -187,20 +278,29 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   const view = ui.view ?? 'overview';
   return (
     <div className="h-full flex flex-col">
-      <Header snapshot={snapshot} view={view} />
+      <Header pr={pr} snapshot={snapshot} view={view} />
       {error && (
         <div className="px-4 py-2 bg-del-subtle border-b border-del-line">
-          <ErrorBox message={error} onRetry={() => void api.refreshPr(prKey)} />
+          <ErrorBox message={error} onRetry={() => void (snapshot ? api.refreshPr(prKey) : retryPr(prKey))} />
         </div>
       )}
       <div className="flex-1 min-h-0">
-        {view === 'files' && <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} />}
-        {view === 'overview' && <Overview snapshot={snapshot} />}
-        {view === 'commits' && <CommitsView snapshot={snapshot} />}
+        {view === 'files' && (snapshot ? <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} /> : <NotYet prKey={prKey} view="files" />)}
+        {view === 'overview' && <Overview pr={pr} snapshot={snapshot} />}
+        {view === 'commits' && (snapshot ? <CommitsView snapshot={snapshot} /> : <NotYet prKey={prKey} view="commits" />)}
       </div>
-      <StatusBar snapshot={snapshot} />
-      {ui.showSubmit && <SubmitReviewDialog snapshot={snapshot} />}
-      {ui.showVersions && <VersionsDialog snapshot={snapshot} />}
+      {snapshot ? (
+        <StatusBar snapshot={snapshot} />
+      ) : (
+        <footer className="flex items-center gap-4 px-3 py-1 bg-titlebar border-t border-line text-muted text-[11.5px] flex-none">
+          <span className="flex-1" />
+          {!error && <SpinnerLabel prKey={prKey} />}
+        </footer>
+      )}
+      {snapshot && ui.showSubmit && <SubmitReviewDialog snapshot={snapshot} />}
+      {snapshot && ui.showVersions && <VersionsDialog snapshot={snapshot} />}
+      {snapshot && ui.showMerge && <MergeDialog snapshot={snapshot} />}
+      {ui.showRuns && <RunsDialog prKey={prKey} />}
     </div>
   );
 }

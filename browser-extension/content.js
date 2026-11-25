@@ -1,5 +1,5 @@
-// Hands GitHub pull requests to the PR Review app through its prreview:// link, the way zoom.us hands meetings to
-// Zoom. Chrome asks "Open PR Review?" the first time; with "Always allow" ticked it goes straight through.
+// Hands GitHub pull requests to the PR Review app through its prreview:// link. Chrome asks "Open PR Review?" the
+// first time; with "Always allow" ticked it goes straight through.
 //
 // The pull request page always loads in the browser too, so cancelling Chrome's prompt simply leaves you on it:
 // Chrome doesn't tell a page whether the app opened, so the page itself is the fallback.

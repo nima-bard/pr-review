@@ -2,14 +2,16 @@ import { useEffect } from 'react';
 import { api } from './api';
 import { TabBar } from './components/TabBar';
 import { refreshInbox } from './state/inbox';
-import { checkSoon, startSessionEvents } from './state/sessions';
+import { checkSoon, startSessionEvents, useSessions } from './state/sessions';
+import { loadQuickActions, prActions, runQuickAction } from './state/quickActions';
 import { loadAppSettings } from './state/settings';
 import { activateIndex, closeTab, newTab, openPr, openPrLink, openSettings, popOutKey, restoreTabs, useTabs } from './state/tabs';
-import { getPrUi, setPrefs, showSearch, updateUi, usePrefs } from './state/ui';
+import { getPrUi, openFind, setPrefs, showSearch, stepFind, updateUi, usePrefs } from './state/ui';
 import { NewTab } from './views/newtab/NewTab';
 import { SettingsView } from './views/newtab/SettingsView';
 import { PrView } from './views/pr/PrView';
 import { showSetup, useSetup } from './state/setup';
+import { startUpdateChecks } from './state/updates';
 import { SetupWizard } from './views/setup/SetupWizard';
 
 /** Code selected in the page or in a code view (Pierre draws code in a shadow DOM), if it's one short line: ⌘⇧F searches for it. */
@@ -42,8 +44,10 @@ export function App() {
     };
     window.addEventListener('focus', onFocus);
     const restored = restoreTabs();
+    void loadQuickActions();
     void refreshInbox();
     const inboxTimer = setInterval(() => void refreshInbox(true, true), 3 * 60_000);
+    const stopUpdates = popOutKey ? () => undefined : startUpdateChecks();
     const first = useTabs.getState().tabs[0];
     if (popOutKey && first?.kind === 'pr') void openPr(popOutKey, first.id);
     // PR links from the browser extension or prreview:// links. The ones that came before the page listened (like
@@ -65,10 +69,25 @@ export function App() {
         if (action === 'toggle-tree') updateUi(tab.key, { showTree: !getPrUi(tab.key).showTree });
         if (action === 'toggle-conversations') updateUi(tab.key, { showPanel: !getPrUi(tab.key).showPanel });
         if (action === 'find-in-files') showSearch(tab.key, selectedCode());
+        if (action === 'find') openFind(tab.key, selectedCode());
+        if (action === 'find-next') stepFind(tab.key, 1);
+        if (action === 'find-previous') stepFind(tab.key, -1);
         if (action === 'show-files') updateUi(tab.key, { view: 'files', showTree: true, sidebar: 'files' });
       }
     });
     const onKey = (e: KeyboardEvent) => {
+      // ⌥⌘1–9: the open PR's quick actions, in their order in Settings.
+      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        const { tabs, activeId } = useTabs.getState();
+        const tab = tabs.find((t) => t.id === activeId);
+        const snapshot = tab?.kind === 'pr' ? useSessions.getState().snapshots[tab.key] : undefined;
+        const action = snapshot ? prActions(snapshot)[Number(e.code.slice(5)) - 1] : undefined;
+        if (snapshot && action) {
+          e.preventDefault();
+          void runQuickAction(snapshot.key, action.id);
+        }
+        return;
+      }
       if (e.metaKey && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
         activateIndex(Number(e.key) - 1);
@@ -80,6 +99,7 @@ export function App() {
       stopMenu();
       stopOpen();
       clearInterval(inboxTimer);
+      stopUpdates();
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('focus', onFocus);
     };
@@ -95,14 +115,7 @@ export function App() {
         {tabs.map((tab) => (
           <div key={tab.id} className="absolute inset-0" style={{ display: tab.id === activeId ? 'block' : 'none' }}>
             {tab.kind === 'new' && <NewTab tabId={tab.id} />}
-            {tab.kind === 'settings' && (
-              <div className="h-full overflow-y-auto">
-                <div className="max-w-[1180px] mx-auto px-6 pt-6 pb-12">
-                  <h1 className="text-[18px] font-semibold text-strong mb-5">Settings</h1>
-                  <SettingsView />
-                </div>
-              </div>
-            )}
+            {tab.kind === 'settings' && <SettingsView />}
             {tab.kind === 'pr' && <PrView prKey={tab.key} active={tab.id === activeId} />}
           </div>
         ))}

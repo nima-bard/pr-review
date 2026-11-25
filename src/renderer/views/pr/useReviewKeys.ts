@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { PrSnapshot } from '../../../shared/model';
-import { focusFile, getPrUi, updateUi, requestComposer } from '../../state/ui';
+import { closeFind, focusFile, getPrUi, requestComposer, updateUi } from '../../state/ui';
 
 function typing(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -38,7 +38,8 @@ export function useReviewKeys(snapshot: PrSnapshot, active: boolean, onHelp: () 
       } else if (e.key === '?') {
         onHelp();
       } else if (e.key === 'Escape') {
-        requestComposer(snapshot.key, null);
+        if (getPrUi(snapshot.key).find.open) closeFind(snapshot.key);
+        else requestComposer(snapshot.key, null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -50,12 +51,14 @@ export const SHORTCUTS: [string, string][] = [
   ['j / k', 'Next / previous file'],
   ['n / p', 'Next / previous open thread'],
   ['t', 'Filter files'],
+  ['⌘F / ⌘G', 'Find in this view / next match'],
   ['⇧⌘F', 'Find in files'],
   ['⇧⌘E', 'Show the file tree'],
   ['⌘B', 'Toggle file tree'],
   ['⇧⌘C', 'Toggle conversations'],
   ['⌥Z', 'Toggle word wrap'],
   ['⌘R', 'Refresh pull request'],
+  ['⌥⌘1–9', 'Run a quick action'],
   ['⌘T / ⌘W', 'New tab / close tab'],
   ['⌘1…9', 'Switch tab'],
   ['⌘,', 'Settings'],

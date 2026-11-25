@@ -1,3 +1,5 @@
+import { api } from '../api';
+import { dismissUpdate, useUpdates } from '../state/updates';
 import { useWaitingCount } from '../state/inbox';
 import { useSessions } from '../state/sessions';
 import { activate, closeTab, moveTab, newTab, popOutKey, popOutTab, useTabs, type Tab } from '../state/tabs';
@@ -9,6 +11,7 @@ const repoOfKey = (key: string) => /([^/]+\/[^/]+)#\d+$/.exec(key)?.[1] ?? key;
 
 function TabLabel({ tab, showRepo }: { tab: Tab; showRepo: boolean }) {
   const snapshot = useSessions((s) => (tab.kind === 'pr' ? s.snapshots[tab.key] : undefined));
+  const preview = useSessions((s) => (tab.kind === 'pr' ? s.previews[tab.key] : undefined));
   const loading = useSessions((s) => (tab.kind === 'pr' ? s.progress[tab.key] !== undefined : false));
   if (tab.kind === 'settings') {
     return (
@@ -29,9 +32,9 @@ function TabLabel({ tab, showRepo }: { tab: Tab; showRepo: boolean }) {
   const m = /([^/]+)#(\d+)$/.exec(tab.key);
   const repo = snapshot?.ref.repo ?? m?.[1] ?? '';
   const num = snapshot?.ref.number ?? Number(m?.[2] ?? 0);
-  const d = snapshot?.details ?? (tab.kind === 'pr' ? tab.summary : undefined);
+  const d = snapshot?.details ?? preview?.details ?? (tab.kind === 'pr' ? tab.summary : undefined);
   const dormant = tab.kind === 'pr' && tab.dormant === true && !snapshot;
-  const by = snapshot?.role === 'author' ? 'you' : d?.author;
+  const by = (snapshot ?? preview)?.role === 'author' ? 'you' : d?.author;
   const tooltip = d ? `${repoOfKey(tab.key)} #${num}: ${d.title} (by ${by})${dormant ? ' · opens when you switch to it' : ''}` : `${repoOfKey(tab.key)} #${num}`;
   return (
     <span className="flex-1 flex items-center gap-2 min-w-0" title={tooltip}>
@@ -110,6 +113,24 @@ export function TabBar() {
         {waiting > 0 && <span className="px-1.5 rounded-full bg-chip text-[11px] font-semibold">{waiting}</span>}
       </button>
       <div className="flex-1" />
+      <UpdateNotice />
     </div>
+  );
+}
+
+/** "Update to x.y" when a newer release is out: opens its page to download; × hides it until the next one. */
+function UpdateNotice() {
+  const { info, dismissed } = useUpdates();
+  if (!info?.available || !info.latest || !info.url || dismissed === info.latest) return null;
+  const { latest, url } = info;
+  return (
+    <span className="no-drag flex items-center mb-1 h-[26px] rounded-full bg-info-bg border border-info-line text-info text-[12px] font-semibold">
+      <button type="button" title={`PR Review ${latest} is available (you have ${info.current}). Open the release to download it.`} onClick={() => void api.openExternal(url)} className="pl-3 pr-1.5 h-full cursor-pointer hover:underline">
+        Update to {latest}
+      </button>
+      <button type="button" aria-label="Hide until the next version" title="Hide until the next version" onClick={() => dismissUpdate(latest)} className="grid place-items-center w-6 h-full rounded-r-full hover:bg-info-line/40 cursor-pointer">
+        <Icon name="close" size={10} />
+      </button>
+    </span>
   );
 }

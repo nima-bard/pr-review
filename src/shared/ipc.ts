@@ -1,5 +1,7 @@
 import type {
+  ActionRun,
   AuthStatus,
+  BrowserExtensionInfo,
   CodeSearchQuery,
   CodeSearchResult,
   CommitsData,
@@ -8,17 +10,21 @@ import type {
   FileContent,
   FileDiffModel,
   InboxSection,
+  MergeInfo,
+  MergeInput,
   OpenPrResult,
   PrEvent,
   PrSnapshot,
   PrSummary,
   ReactionContent,
   RepoMapping,
+  ReviewerOptions,
   SearchPage,
   Settings,
   SetupInfo,
   StaleWorktree,
   SubmitInput,
+  UpdateInfo,
   WorktreeInfo,
 } from './model';
 
@@ -46,6 +52,29 @@ export interface Api {
   submitReview(key: string, input: SubmitInput): Promise<void>;
   addPrComment(key: string, body: string): Promise<void>;
   requestReviews(key: string, logins: string[]): Promise<void>;
+  /** The terminal apps installed that quick actions can open in. */
+  terminalApps(): Promise<{ id: string; name: string }[]>;
+  /** Runs quick action `actionId` (from Settings) on the PR, or on its `file` for a file action. */
+  runQuickAction(key: string, actionId: string, file: string | null): Promise<void>;
+  stopQuickAction(runId: string): Promise<void>;
+  /** Forgets a finished background run. */
+  dismissQuickActionRun(runId: string): Promise<void>;
+  /** The PR's background runs, newest first (for a window opened while they run). */
+  quickActionRuns(key: string): Promise<ActionRun[]>;
+  /** What merging the PR takes: GitHub's merge settings, the rules' state and its proposed commit messages. */
+  mergeInfo(key: string): Promise<MergeInfo>;
+  mergePr(key: string, input: MergeInput): Promise<void>;
+  disableAutoMerge(key: string): Promise<void>;
+  /** Brings the PR's branch up to date with its base branch. */
+  updateBranch(key: string, method: 'MERGE' | 'REBASE'): Promise<void>;
+  /** Closes or reopens the PR, with a comment if `comment` isn't empty. */
+  setPrOpen(key: string, open: boolean, comment: string): Promise<void>;
+  /** Converts the PR to a draft, or marks it ready for review. */
+  setPrDraft(key: string, draft: boolean): Promise<void>;
+  /** Who can be asked to review (users matching `query`, GitHub's suggestions, teams). */
+  reviewerOptions(key: string, query: string): Promise<ReviewerOptions>;
+  /** Requests reviews from `add` and withdraws those to `remove` (logins, or teams as "org/slug"). */
+  changeReviewRequests(key: string, add: string[], remove: string[]): Promise<void>;
   applySuggestion(key: string, threadId: string): Promise<void>;
   setThreadPlacement(key: string, threadId: string, line: number | null): Promise<void>;
   listCommits(key: string): Promise<CommitsData>;
@@ -72,6 +101,14 @@ export interface Api {
   setupInfo(): Promise<SetupInfo>;
   /** A native folder picker; null when cancelled. */
   pickFolder(title: string): Promise<string | null>;
+  /** Compares this version with the latest GitHub release. */
+  checkForUpdate(): Promise<UpdateInfo>;
+  /** Shows a file of the PR's worktree in Finder. */
+  showInFinder(key: string, path: string): Promise<void>;
+  /** The browser extension's folder, and the installed browsers that can load it. */
+  browserExtensionInfo(): Promise<BrowserExtensionInfo>;
+  /** Asks a browser to open its extensions page ("chrome://extensions"); false if it couldn't be started. */
+  openExtensionsPage(page: string): Promise<boolean>;
   /** Shows the Chrome extension's folder in Finder. */
   revealBrowserExtension(): Promise<void>;
   authStatus(): Promise<AuthStatus>;
@@ -84,9 +121,10 @@ export interface Api {
   takePendingLinks(): Promise<string[]>;
 }
 
-export type ContextMenuItem = { id: string; label: string; enabled?: boolean } | 'separator';
+/** `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). */
+export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string } | 'separator';
 
-export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'find-in-files' | 'show-files';
+export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 
 export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks'>;
 
@@ -111,6 +149,19 @@ export const API_METHODS = [
   'submitReview',
   'addPrComment',
   'requestReviews',
+  'terminalApps',
+  'runQuickAction',
+  'stopQuickAction',
+  'dismissQuickActionRun',
+  'quickActionRuns',
+  'mergeInfo',
+  'mergePr',
+  'disableAutoMerge',
+  'updateBranch',
+  'setPrOpen',
+  'setPrDraft',
+  'reviewerOptions',
+  'changeReviewRequests',
   'applySuggestion',
   'setThreadPlacement',
   'listCommits',
@@ -132,6 +183,10 @@ export const API_METHODS = [
   'popOut',
   'contextMenu',
   'revealBrowserExtension',
+  'browserExtensionInfo',
+  'openExtensionsPage',
+  'showInFinder',
+  'checkForUpdate',
   'setupInfo',
   'pickFolder',
   'authStatus',

@@ -6,10 +6,10 @@ import { api, errorText } from '../../api';
 import { FileIcon, FolderIcon } from '../../components/fileIcons';
 import { Octicon } from '../../components/octicons';
 import { cx, Icon, Segmented, Spinner } from '../../components/ui';
-import { openAtLine, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
+import { openAtLine, openFileTab, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
 
 /** A toggle inside the search box, like VS Code's Aa / ab / .* buttons. */
-function Toggle({ on, label, title, onChange, children }: { on: boolean; label: string; title: string; onChange(v: boolean): void; children: ReactNode }) {
+export function Toggle({ on, label, title, onChange, children }: { on: boolean; label: string; title: string; onChange(v: boolean): void; children: ReactNode }) {
   return (
     <button
       type="button"
@@ -155,7 +155,7 @@ function FileResult({ snapshot, file: f, depth, showDir, changed, collapsed, tog
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => toggle(f.path, open)}
+        onClick={(e) => (e.metaKey ? openFileTab(key, f.path, inPr, false) : toggle(f.path, open))}
         title={f.path}
         className="flex w-full items-center gap-1.5 h-6 pr-2.5 text-left text-[12.5px] hover:bg-hover cursor-pointer"
         style={{ paddingLeft: 8 + depth * INDENT }}
@@ -177,7 +177,7 @@ function FileResult({ snapshot, file: f, depth, showDir, changed, collapsed, tog
             <button
               key={m.line}
               type="button"
-              onClick={() => openAtLine(key, f.path, m.line, inPr, false)}
+              onClick={(e) => openAtLine(key, f.path, m.line, inPr, e.metaKey)}
               onDoubleClick={() => openAtLine(key, f.path, m.line, inPr, true)}
               title={`${f.path}:${m.line}`}
               className={cx('flex w-full items-baseline gap-2 pr-2.5 py-[3px] text-left cursor-pointer', current ? 'bg-active' : 'hover:bg-hover')}

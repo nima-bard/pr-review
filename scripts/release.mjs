@@ -95,13 +95,23 @@ if (!publish) {
 }
 
 step(`Creating the draft release ${tag}`);
-const notes = `## Install
+// This version's section of CHANGELOG.md, without its heading.
+const changelog = (() => {
+  const text = existsSync(join(root, 'CHANGELOG.md')) ? readFileSync(join(root, 'CHANGELOG.md'), 'utf8') : '';
+  const start = text.indexOf(`\n## ${version}\n`);
+  if (start === -1) return '';
+  const body = text.slice(start + `\n## ${version}\n`.length);
+  const end = body.search(/\n## /);
+  return (end === -1 ? body : body.slice(0, end)).trim().replace(/^### /gm, '## ');
+})();
+if (!changelog) console.log(`  (CHANGELOG.md has no "## ${version}" section: the notes only have the install steps.)`);
+const notes = `${changelog ? `${changelog}\n\n` : ''}## Install
 
 1. Download \`${basename(dmg)}\` (Macs with Apple silicon), open it and drag **PR Review** into Applications.
 2. The app isn't notarized by Apple, so macOS blocks the first launch. Open it once, then click **Open Anyway** in **System Settings › Privacy & Security**. Or run \`xattr -dr com.apple.quarantine "/Applications/PR Review.app"\` in Terminal.
 3. The first launch walks you through the setup: GitHub sign-in (through the GitHub CLI), where your clones are, worktrees and editor.
 
-Optional: to open GitHub pull request links in the app, unzip \`${basename(extension)}\` and load it in Chrome (chrome://extensions › Developer mode › Load unpacked). The app ships it too: Settings › Open pull requests from GitHub.
+Optional: to open GitHub pull request links in the app, load the browser extension in Chrome or Edge: open chrome://extensions (or edge://extensions), turn on Developer mode and drag the extension folder onto the page. The app ships it (Settings › Open pull requests from GitHub shows where), and \`${basename(extension)}\` has it too.
 
 Checksums are in \`SHA256SUMS.txt\`.
 `;

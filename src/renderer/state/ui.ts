@@ -8,6 +8,9 @@ export type ContentTab = { id: 'changes'; kind: 'changes' } | { id: string; kind
 
 export type { ComposerTarget } from './unsent';
 
+/** Which version of a diff ⌘F searches: the old one (deleted and unchanged lines), the new one (added and unchanged), or both. */
+export type FindSide = 'both' | 'old' | 'new';
+
 export interface PrUi {
   view: PrViewKind | null;
   tree: 'changed' | 'all';
@@ -28,6 +31,10 @@ export interface PrUi {
   collapsed: Record<string, boolean>;
   openComments: Record<string, boolean>;
   showSubmit: boolean;
+  /** The merge dialog. */
+  showMerge: boolean;
+  /** The output of background quick actions. */
+  showRuns: boolean;
   showVersions: boolean;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
@@ -40,6 +47,12 @@ export interface PrUi {
   searchFocusSeq: number;
   /** A line a file tab should show and select (a search result); `seq` repeats a jump to the same line. */
   focusLine: { path: string; line: number; seq: number } | null;
+  /** ⌘F: find in the code on screen, in both versions of a diff or one. The query stays when the bar closes, like VS Code's. */
+  find: { open: boolean; pattern: string; matchCase: boolean; wholeWord: boolean; regex: boolean; side: FindSide };
+  /** Bumped by ⌘F, so the find box takes focus again. */
+  findFocusSeq: number;
+  /** ⌘G / ⇧⌘G and the bar's arrows: a step to the next or previous match. */
+  findStep: { dir: 1 | -1; seq: number };
 }
 
 const DEFAULT_UI: PrUi = {
@@ -60,12 +73,17 @@ const DEFAULT_UI: PrUi = {
   collapsed: {},
   openComments: {},
   showSubmit: false,
+  showMerge: false,
+  showRuns: false,
   pendingCompare: null,
   sidebar: 'files',
   search: { pattern: '', matchCase: false, wholeWord: false, regex: false, include: '', exclude: '', scope: 'changed' },
   searchDetails: false,
   searchFocusSeq: 0,
   focusLine: null,
+  find: { open: false, pattern: '', matchCase: false, wholeWord: false, regex: false, side: 'both' },
+  findFocusSeq: 0,
+  findStep: { dir: 1, seq: 0 },
   showVersions: false,
 };
 
@@ -128,6 +146,20 @@ export function showSearch(key: string, seed?: string): void {
     searchFocusSeq: ui.searchFocusSeq + 1,
     ...(seed ? { search: { ...ui.search, pattern: seed } } : {}),
   }));
+}
+
+/** ⌘F: the find bar over the code (in the Files view), focused, with `seed` (selected code) as its query. */
+export function openFind(key: string, seed?: string): void {
+  updateUi(key, (ui) => (ui.view === 'files' ? { find: { ...ui.find, open: true, ...(seed ? { pattern: seed } : {}) }, findFocusSeq: ui.findFocusSeq + 1 } : {}));
+}
+
+export function closeFind(key: string): void {
+  updateUi(key, (ui) => ({ find: { ...ui.find, open: false } }));
+}
+
+/** To the next (1) or previous (-1) match, while the find bar is open. */
+export function stepFind(key: string, dir: 1 | -1): void {
+  updateUi(key, (ui) => (ui.find.open ? { findStep: { dir, seq: ui.findStep.seq + 1 } } : {}));
 }
 
 /** Drag reorder of the file tabs ("All changes" included). */

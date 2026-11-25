@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pollDeviceToken, startDeviceFlow } from '../core/github/deviceFlow';
 import { TokenStore } from './tokenStore';
 import type { Api, InvokeMethods, ContextMenuItem } from '../shared/ipc';
-import { prKey, repoSlug, type PrEvent, type PrRef, type RepoMapping, type StaleWorktree, type WorktreeInfo } from '../shared/model';
+import { prKey, repoSlug, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type StaleWorktree, type WorktreeInfo } from '../shared/model';
 import { parsePrInput } from '../shared/prInput';
 import { GhTokenProvider } from '../core/github/auth';
 import { endpointsFor, GitHubClient } from '../core/github/client';
@@ -16,7 +16,10 @@ import { AppState } from '../core/store/appState';
 import { DraftStore } from '../core/store/drafts';
 import { openInEditor } from './editor';
 import { setupInfo } from './setup';
-import { PrSession } from './session';
+import { checkForUpdate } from './updates';
+import { PrSession, type SessionEvent } from './session';
+import { ActionRunner, installedTerminals, openInTerminal } from './quickActions';
+import { actionEnv } from '../shared/quickActions';
 
 export interface RegistryHost {
   userDataDir: string;
@@ -29,6 +32,16 @@ export interface RegistryHost {
   applyAppTheme(id: string): void;
   /** Shows the Chrome extension's folder in Finder, for "Load unpacked". */
   revealBrowserExtension(): void;
+  /** The extension's folder and the installed browsers' extensions pages. */
+  browserExtensionInfo(): Promise<BrowserExtensionInfo>;
+  /** Asks a browser to open its extensions page. */
+  openExtensionsPage(page: string): Promise<boolean>;
+  /** Shows a file or folder in Finder. */
+  showItemInFolder(path: string): void;
+  /** Asks in a native dialog; true to go ahead. */
+  confirm(message: string, detail: string, button: string): Promise<boolean>;
+  /** A system notification while the app isn't in front; clicking it shows the pull request `url`. */
+  notify(title: string, body: string, url: string): void;
 }
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -44,10 +57,26 @@ export class SessionRegistry {
 
   private readonly tokens: TokenStore;
 
+  /** Background quick actions. When one ends: a notification, and a sync, since it may have changed the PR on GitHub. */
+  private readonly actions = new ActionRunner(
+    (key, run) => this.host.emit({ type: 'action', key, run }),
+    (key, run) => {
+      const snap = this.sessions.get(key)?.current;
+      const outcome = run.status === 'succeeded' ? 'finished' : run.status === 'stopped' ? 'was stopped' : `failed${run.exitCode !== null ? ` (exit ${run.exitCode})` : ''}`;
+      if (snap) this.host.notify(`${run.name} ${outcome}`, `${snap.ref.owner}/${snap.ref.repo} #${snap.ref.number}: ${snap.details.title}`, snap.details.url);
+      void this.sessions.get(key)?.refresh().catch(() => undefined);
+    },
+  );
+
   constructor(private readonly host: RegistryHost) {
     this.appState = new AppState(host.userDataDir);
     this.drafts = new DraftStore((key) => this.appState.draftsFile(key));
     this.tokens = new TokenStore(host.userDataDir);
+  }
+
+  /** Stops the background quick actions (the app is quitting). */
+  stopActions(): void {
+    this.actions.stopAll();
   }
 
   private resetAuth(host: string): void {
@@ -102,12 +131,13 @@ export class SessionRegistry {
     return mapping?.path ?? null;
   }
 
-  private emitFor(key: string) {
-    return (e: { type: 'snapshot'; snapshot: import('../shared/model').PrSnapshot } | { type: 'progress'; message: string } | { type: 'error'; message: string } | { type: 'checked'; at: string }) => {
-      if (e.type === 'snapshot') this.host.emit({ type: 'snapshot', key, snapshot: e.snapshot });
-      else if (e.type === 'progress') this.host.emit({ type: 'progress', key, message: e.message });
-      else if (e.type === 'checked') this.host.emit({ type: 'checked', key, at: e.at });
-      else this.host.emit({ type: 'error', key, message: e.message });
+  /**
+   * Passes a session's events on with its PR's key, while it's the open session for that PR: a closed one can still
+   * be loading, and its late snapshot would bring the closed PR back (and show it, stale, if it's opened again).
+   */
+  private emitFor(key: string, session: () => PrSession) {
+    return (e: SessionEvent) => {
+      if (this.sessions.get(key) === session()) this.host.emit({ ...e, key } as PrEvent);
     };
   }
 
@@ -221,7 +251,7 @@ export class SessionRegistry {
             client: this.client(ref.host),
             viewer,
             clonePath,
-            emit: this.emitFor(key),
+            emit: this.emitFor(key, () => session),
           });
           this.sessions.set(key, session);
           const opening = session.open().catch((err: unknown) => {
@@ -273,6 +303,31 @@ export class SessionRegistry {
       submitReview: (key, input) => this.session(key).submitReview(input),
       addPrComment: (key, body) => this.session(key).addPrComment(body),
       requestReviews: (key, logins) => this.session(key).requestReviews(logins),
+      terminalApps: () => installedTerminals(),
+      runQuickAction: async (key, actionId, file) => {
+        const settings = await this.appState.settings();
+        const action = settings.quickActions.find((a) => a.id === actionId);
+        if (!action) throw new Error('This quick action no longer exists. Check Settings › Quick actions.');
+        const snap = this.session(key).current;
+        if (!snap) throw new Error('The pull request is still loading.');
+        if (action.mode === 'background' && !action.command.trim()) throw new Error(`“${action.name}” has no command to run.`);
+        const where = action.mode === 'terminal' ? 'in a terminal' : 'in the background';
+        if (action.confirm && !(await this.host.confirm(`Run “${action.name}” ${where}?`, `${action.command || '(opens a shell)'}\n\nIn ${snap.worktree.path}`, 'Run'))) return;
+        const env = actionEnv(snap, file);
+        if (action.mode === 'terminal') await openInTerminal(settings.terminalApp, snap.worktree.path, env, action.command, action.name);
+        else this.actions.start(key, action, snap.worktree.path, env, file);
+      },
+      stopQuickAction: async (runId) => this.actions.stop(runId),
+      dismissQuickActionRun: async (runId) => this.actions.dismiss(runId),
+      quickActionRuns: async (key) => this.actions.list(key),
+      mergeInfo: (key) => this.session(key).mergeInfo(),
+      mergePr: (key, input) => this.session(key).merge(input),
+      disableAutoMerge: (key) => this.session(key).disableAutoMerge(),
+      updateBranch: (key, method) => this.session(key).updateBranch(method),
+      setPrOpen: (key, open, comment) => this.session(key).setOpen(open, comment),
+      setPrDraft: (key, draft) => this.session(key).setDraft(draft),
+      reviewerOptions: (key, query) => this.session(key).reviewerOptions(query),
+      changeReviewRequests: (key, add, remove) => this.session(key).changeReviewRequests(add, remove),
       applySuggestion: (key, threadId) => this.session(key).applySuggestion(threadId),
       setThreadPlacement: (key, threadId, line) => this.session(key).setThreadPlacement(threadId, line),
       listCommits: (key) => this.session(key).listCommits(),
@@ -311,7 +366,14 @@ export class SessionRegistry {
       },
       openExternal: (url) => this.host.openExternal(url),
       revealBrowserExtension: async () => this.host.revealBrowserExtension(),
+      browserExtensionInfo: () => this.host.browserExtensionInfo(),
+      openExtensionsPage: (page) => this.host.openExtensionsPage(page),
+      showInFinder: async (key, path) => {
+        const root = this.session(key).current?.worktree.path;
+        if (root) this.host.showItemInFolder(join(root, path));
+      },
       setupInfo: () => setupInfo(),
+      checkForUpdate: () => checkForUpdate(),
       pickFolder: (title) => this.host.pickFolder(title),
       getOpenTabs: () => this.appState.openTabs(),
       saveOpenTabs: (inputs) => this.appState.saveOpenTabs(inputs),
