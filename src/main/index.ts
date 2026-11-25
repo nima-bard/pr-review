@@ -1,0 +1,213 @@
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron';
+import { join } from 'node:path';
+import { fixPath } from '../core/env';
+import { markStay, prFromAppUrl } from '../shared/prInput';
+import { appTheme, DEFAULT_APP_THEME } from '../shared/themes';
+import { registerIpc } from './ipc';
+import { SessionRegistry, userDataSubdir } from './sessions';
+
+let registry: SessionRegistry | undefined;
+let windowBackground = appTheme(DEFAULT_APP_THEME).background;
+
+/** Context menus and the window background before the page paints follow the app theme. */
+function applyAppTheme(id: string): void {
+  const theme = appTheme(id);
+  nativeTheme.themeSource = theme.kind;
+  windowBackground = theme.background;
+  for (const w of BrowserWindow.getAllWindows()) w.setBackgroundColor(theme.background);
+}
+
+if (process.env.PR_REVIEW_USER_DATA) app.setPath('userData', process.env.PR_REVIEW_USER_DATA);
+
+/** Pop-out windows show one PR; links always go to the main window. */
+const popOuts = new WeakSet<BrowserWindow>();
+/** PR links (prreview://) that arrived before a window's page was listening, e.g. the link that launched the app. */
+const pendingLinks: string[] = [];
+/** Pages that asked for pending links, so they are listening for new ones too. */
+const linkReady = new Set<number>();
+/** Set once startup has opened the main window; before that a link only waits for it. */
+let started = false;
+
+const mainWindow = () => BrowserWindow.getAllWindows().find((w) => !popOuts.has(w));
+
+/** The Chrome extension's folder: shipped next to the app's resources, or in the repo when running from source. */
+function browserExtensionDir(): string {
+  // From source the main bundle is out/main/index.js, two levels below the repo.
+  return app.isPackaged ? join(process.resourcesPath, 'browser-extension') : join(import.meta.dirname, '../../browser-extension');
+}
+
+function bringToFront(win: BrowserWindow): void {
+  if (process.env.PR_REVIEW_HIDDEN_WINDOWS) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  app.focus({ steal: true });
+}
+
+function createWindow(popOutKey?: string): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 960,
+    minHeight: 600,
+    title: 'PR Review',
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 14, y: 14 },
+    backgroundColor: windowBackground,
+    show: false,
+    webPreferences: {
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      // A hidden window must still paint, for screenshots in automated runs.
+      backgroundThrottling: !process.env.PR_REVIEW_HIDDEN_WINDOWS,
+    },
+  });
+  // Automated runs (PR_REVIEW_HIDDEN_WINDOWS) keep their windows off screen instead of popping up over yours.
+  if (!process.env.PR_REVIEW_HIDDEN_WINDOWS) win.once('ready-to-show', () => win.show());
+  if (popOutKey) popOuts.add(win);
+  const id = win.webContents.id;
+  // A reload or a closed window stops listening until its page asks again.
+  win.webContents.on('did-navigate', () => linkReady.delete(id));
+  win.on('closed', () => linkReady.delete(id));
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://')) void shell.openExternal(markStay(url));
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('http://localhost')) event.preventDefault();
+  });
+  const hash = popOutKey ? `pr=${encodeURIComponent(popOutKey)}` : '';
+  const devUrl = process.env.ELECTRON_RENDERER_URL;
+  if (devUrl) void win.loadURL(hash ? `${devUrl}#${hash}` : devUrl);
+  else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'), hash ? { hash } : {});
+  return win;
+}
+
+/** Opens the PR a prreview:// link points at in the main window, or keeps it until that window's page is listening. */
+function openFromUrl(url: string): void {
+  const input = prFromAppUrl(url);
+  if (!input) return;
+  const win = mainWindow();
+  if (win && linkReady.has(win.webContents.id)) {
+    win.webContents.send('open-pr', input);
+    bringToFront(win);
+    return;
+  }
+  pendingLinks.push(input);
+  // macOS keeps the app running without windows: open one, and its page collects the link.
+  if (!win && started) createWindow();
+}
+
+ipcMain.handle('links:take', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || popOuts.has(win)) return [];
+  linkReady.add(event.sender.id);
+  if (pendingLinks.length > 0) bringToFront(win);
+  return pendingLinks.splice(0);
+});
+
+// Only the installed app with the normal profile claims prreview://. Dev and test runs (plain Electron, or another
+// profile through PR_REVIEW_USER_DATA) would otherwise take the scheme over from it.
+if (app.isPackaged && !process.env.PR_REVIEW_USER_DATA) app.setAsDefaultProtocolClient('prreview');
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  if (app.isReady()) openFromUrl(url);
+  else void app.whenReady().then(() => openFromUrl(url));
+});
+
+function buildMenu(): void {
+  const send = (channel: string) => () => (BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.webContents.send('menu', channel);
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('settings') },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' },
+        ],
+      },
+      {
+        label: 'File',
+        submenu: [
+          { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: send('new-tab') },
+          { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: send('close-tab') },
+          { type: 'separator' },
+          { label: 'Refresh Pull Request', accelerator: 'CmdOrCtrl+R', click: send('refresh') },
+        ],
+      },
+      { role: 'editMenu' },
+      {
+        label: 'View',
+        submenu: [
+          { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+B', click: send('toggle-tree') },
+          { label: 'Toggle Conversations', accelerator: 'CmdOrCtrl+Shift+C', click: send('toggle-conversations') },
+          { label: 'Toggle Word Wrap', accelerator: 'Alt+Z', click: send('toggle-word-wrap') },
+          { type: 'separator' },
+          { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: send('find-in-files') },
+          { label: 'Show Files', accelerator: 'CmdOrCtrl+Shift+E', click: send('show-files') },
+          { type: 'separator' },
+          { role: 'toggleDevTools' },
+          { role: 'resetZoom' },
+          { role: 'zoomIn' },
+          { role: 'zoomOut' },
+        ],
+      },
+      { role: 'windowMenu' },
+    ]),
+  );
+}
+
+void app.whenReady().then(async () => {
+  await fixPath();
+  registry = new SessionRegistry({
+    userDataDir: userDataSubdir(app.getPath('userData')),
+    emit: (event) => {
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('pr:event', event);
+    },
+    pickFolder: async (title) => {
+      const res = await dialog.showOpenDialog({ title, properties: ['openDirectory'] });
+      return res.canceled ? null : (res.filePaths[0] ?? null);
+    },
+    // Pull request links the app sends to the browser are marked, so the Chrome extension leaves them on GitHub.
+    openExternal: async (url) => {
+      if (url.startsWith('https://')) await shell.openExternal(markStay(url));
+    },
+    revealBrowserExtension: () => shell.showItemInFolder(browserExtensionDir()),
+    popOut: (key) => {
+      createWindow(key);
+    },
+    contextMenu: (items) =>
+      new Promise((resolve) => {
+        const menu = Menu.buildFromTemplate(
+          items.map((item) => (item === 'separator' ? { type: 'separator' as const } : { label: item.label, enabled: item.enabled ?? true, click: () => resolve(item.id) })),
+        );
+        // On macOS the close callback can run before the item's click handler, so give the click a moment to win.
+        menu.popup({ window: BrowserWindow.getFocusedWindow() ?? undefined, callback: () => setTimeout(() => resolve(null), 100) });
+      }),
+    applyAppTheme,
+  });
+  applyAppTheme((await registry.appState.settings()).appTheme);
+  registerIpc(registry.api());
+  buildMenu();
+  createWindow();
+  started = true;
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => registry?.disposeAll());

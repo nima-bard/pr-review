@@ -1,0 +1,31 @@
+appId: io.github.stefan-schweiger.pr-review
+productName: PR Review
+copyright: Copyright © 2026 Stefan Schweiger
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - '!node_modules/**/*'
+# File names without spaces, so they keep their names as GitHub release assets.
+artifactName: pr-review-${version}-${arch}.${ext}
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  # Ad-hoc signed: not notarized (that needs an Apple Developer ID), so macOS asks once before the first launch.
+  identity: '-'
+  hardenedRuntime: false
+# The Chrome extension that hands github.com pull requests to the app (Settings shows the folder for "Load unpacked").
+extraResources:
+  - from: browser-extension
+    to: browser-extension
+protocols:
+  - name: PR Review
+    schemes:
+      - prreview
+dmg:
+  sign: false

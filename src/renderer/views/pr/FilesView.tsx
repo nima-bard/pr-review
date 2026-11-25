@@ -1,0 +1,422 @@
+import { File as PierreFile } from '@pierre/diffs/react';
+import type { SelectedLineRange } from '@pierre/diffs';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
+import type { PrSnapshot } from '../../../shared/model';
+import { Button, cx, Icon, Kbd, Spinner } from '../../components/ui';
+import { SHORTCUTS, useReviewKeys } from './useReviewKeys';
+import { commentedPaths, FileSection, FullFileDiff, strayThreads, threadsForFile } from '../../diff/FileSection';
+import { ThreadCard } from '../../diff/ThreadCard';
+import { useFileContent } from '../../diff/useFileDiff';
+import { api } from '../../api';
+import { appendToSummary, closeContentTab, closeContentTabs, getPrUi, moveContentTab, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
+import { MARKER_CLASS, useTabReorder } from '../../components/useTabReorder';
+import { FileIcon } from '../../components/fileIcons';
+import { useDiffAppearance } from '../../state/settings';
+import { useFocusLine } from '../../diff/useFocusLine';
+import { useSearchHighlights } from '../../diff/useSearchHighlights';
+import { ConversationsPanel } from './ConversationsPanel';
+import { FileTree } from './FileTree';
+import { SearchPanel } from './SearchPanel';
+
+async function showTabMenu(key: string, id: string): Promise<void> {
+  const tabs = getPrUi(key).contentTabs;
+  const index = tabs.findIndex((t) => t.id === id);
+  const files = tabs.filter((t) => t.kind === 'file').map((t) => t.id);
+  const others = files.filter((f) => f !== id);
+  const right = tabs.slice(index + 1).filter((t) => t.kind === 'file').map((t) => t.id);
+  const isFile = tabs[index]?.kind === 'file';
+  const choice = await api.contextMenu([
+    { id: 'close', label: 'Close', enabled: isFile },
+    { id: 'others', label: 'Close Others', enabled: others.length > 0 },
+    { id: 'right', label: 'Close to the Right', enabled: right.length > 0 },
+    'separator',
+    { id: 'all', label: 'Close All', enabled: files.length > 0 },
+  ]);
+  if (choice === 'close') closeContentTab(key, id);
+  if (choice === 'others') closeContentTabs(key, others, id);
+  if (choice === 'right') closeContentTabs(key, right, id);
+  if (choice === 'all') closeContentTabs(key, files);
+}
+
+function ContentTabs({ snapshot }: { snapshot: PrSnapshot }) {
+  const ui = usePrUi(snapshot.key);
+  const reorder = useTabReorder('files', ui.contentTabs.map((t) => t.id), (from, slot) => moveContentTab(snapshot.key, from, slot));
+  return (
+    <div role="tablist" aria-label="Open files" {...reorder.rowProps} className="flex items-stretch bg-side border-b border-line overflow-x-auto flex-none">
+      {ui.contentTabs.map((t, index) => {
+        const active = t.id === ui.activeContent;
+        const marker = reorder.marker(index);
+        const label = t.kind === 'changes' ? 'All changes' : t.path.split('/').pop();
+        return (
+          <div
+            key={t.id}
+            {...reorder.tabProps(index)}
+            onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+            onAuxClick={(e) => {
+              if (e.button === 1 && t.kind === 'file') closeContentTab(snapshot.key, t.id);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              void showTabMenu(snapshot.key, t.id);
+            }}
+            className={cx(
+              'relative flex items-center border-r border-line',
+              active ? 'bg-bg text-strong after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent' : 'text-soft',
+              reorder.dragging === t.id && 'opacity-50',
+              marker && MARKER_CLASS[marker],
+            )}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => updateUi(snapshot.key, { activeContent: t.id })}
+              onDoubleClick={() => t.kind === 'file' && updateUi(snapshot.key, (u) => ({ contentTabs: u.contentTabs.map((x) => (x.id === t.id && x.kind === 'file' ? { ...x, preview: false } : x)) }))}
+              className={cx('flex items-center gap-2 h-9 pl-3.5 pr-2 whitespace-nowrap cursor-pointer', t.kind === 'file' && t.preview && 'italic')}
+              title={t.kind === 'file' ? t.path : undefined}
+            >
+              {t.kind === 'changes' ? <Icon name="list" size={13} /> : <FileIcon path={t.path} size={14} />}
+              {label}
+              {t.kind === 'changes' && <span className="text-muted text-[12px]">{snapshot.files.length} files</span>}
+              {t.kind === 'file' && !t.changed && <span className="not-italic text-[11px] text-muted">read-only</span>}
+            </button>
+            {t.kind === 'file' && (
+              <button type="button" aria-label={`Close ${t.path}`} onClick={() => closeContentTab(snapshot.key, t.id)} className="grid place-items-center w-6 h-6 mr-1 rounded text-faint hover:text-fg hover:bg-raised cursor-pointer">
+                <Icon name="close" size={11} />
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Comments on files that left the PR and whose line couldn't be found; otherwise no file section would show them. */
+function StrayComments({ snapshot }: { snapshot: PrSnapshot }) {
+  const ui = usePrUi(snapshot.key);
+  const hideResolved = usePrefs((p) => p.hideResolved);
+  const byPath = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof strayThreads>>();
+    for (const t of strayThreads(snapshot)) {
+      if (hideResolved && t.isResolved && t.id !== ui.focusThread) continue;
+      map.set(t.anchor.path, [...(map.get(t.anchor.path) ?? []), t]);
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [snapshot, hideResolved, ui.focusThread]);
+  if (byPath.length === 0) return null;
+  const count = byPath.reduce((n, [, list]) => n + list.length, 0);
+  return (
+    <section aria-label="Comments on code no longer in this PR" className="border border-warn-line rounded-[9px] bg-panel overflow-clip">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-3 py-2 bg-subtle border-b border-line-2">
+        <strong className="text-strong font-semibold">Comments on code that's no longer in this PR</strong>
+        <span className="text-muted text-[12px]">{count}</span>
+        <span className="text-muted text-[12px] basis-full">Their file was deleted, renamed or split, and the commented line couldn't be found in the current code.</span>
+      </div>
+      <div className="flex flex-col gap-4 p-3">
+        {byPath.map(([path, threads]) => (
+          <div key={path} id={`file-${path}`} className="flex flex-col gap-2">
+            <div className="flex items-center gap-1.5 font-mono text-[12px] text-muted min-w-0">
+              <FileIcon path={path} size={14} />
+              <span className="truncate">{path}</span>
+            </div>
+            {threads.map((t) => (
+              <ThreadCard key={t.id} snapshot={snapshot} thread={t} focused={ui.focusThread === t.id} wide />
+            ))}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AllChanges({ snapshot }: { snapshot: PrSnapshot }) {
+  const ui = usePrUi(snapshot.key);
+  const prefs = usePrefs();
+  const sorted = useMemo(() => [...snapshot.files].sort((a, b) => a.path.localeCompare(b.path)), [snapshot.files]);
+  const commented = useMemo(() => (prefs.onlyCommented ? commentedPaths(snapshot, prefs.hideResolved) : null), [snapshot, prefs.onlyCommented, prefs.hideResolved]);
+  const afterViewed = prefs.hideViewed ? sorted.filter((f) => f.viewed !== 'VIEWED' || f.path === ui.focusPath) : sorted;
+  const hiddenViewed = sorted.length - afterViewed.length;
+  const files = commented ? afterViewed.filter((f) => commented.has(f.path) || f.path === ui.focusPath) : afterViewed;
+  const hiddenUncommented = afterViewed.length - files.length;
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const path = ui.focusPath;
+    const threadId = ui.focusThread;
+    if (!path) return;
+    if (ui.collapsed[path]) updateUi(snapshot.key, (u) => ({ collapsed: { ...u.collapsed, [path]: false } }));
+    const content = list.current;
+    const scroller = content?.closest<HTMLElement>('.overflow-y-auto') ?? null;
+    // Sections load lazily as they near the viewport, and the target's own diff loads too, so heights keep changing
+    // for a while after a jump. Keep the target (the thread, once it exists) in place until the user takes over.
+    let pinned = true;
+    const align = () => {
+      if (!pinned) return;
+      const thread = threadId ? document.getElementById(`thread-${threadId}`) : null;
+      (thread ?? document.getElementById(`file-${path}`))?.scrollIntoView({ block: thread ? 'center' : 'start' });
+    };
+    align();
+    const resize = new ResizeObserver(align);
+    if (content) resize.observe(content);
+    const userEvents = ['wheel', 'touchmove', 'pointerdown', 'keydown'] as const;
+    const release = () => {
+      pinned = false;
+      resize.disconnect();
+    };
+    for (const e of userEvents) scroller?.addEventListener(e, release, { passive: true });
+    const timeout = setTimeout(release, 8000);
+    return () => {
+      release();
+      clearTimeout(timeout);
+      for (const e of userEvents) scroller?.removeEventListener(e, release);
+    };
+  }, [ui.focusPath, ui.focusThread, ui.focusSeq, snapshot.key]);
+  if (sorted.length === 0) return <div className="p-6 text-muted">This pull request has no file changes.</div>;
+  return (
+    <div ref={list} className="flex flex-col gap-3.5 p-4 pb-10">
+      {(hiddenViewed > 0 || hiddenUncommented > 0 || prefs.hideResolved) && (
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
+          {hiddenViewed > 0 && (
+            <span>
+              {hiddenViewed} viewed file{hiddenViewed === 1 ? '' : 's'} hidden ·{' '}
+              <button type="button" onClick={() => setPrefs({ hideViewed: false })} className="text-accent cursor-pointer">
+                show
+              </button>
+            </span>
+          )}
+          {hiddenUncommented > 0 && (
+            <span>
+              {hiddenUncommented} file{hiddenUncommented === 1 ? '' : 's'} without comments hidden ·{' '}
+              <button type="button" onClick={() => setPrefs({ onlyCommented: false })} className="text-accent cursor-pointer">
+                show
+              </button>
+            </span>
+          )}
+          {prefs.hideResolved && (
+            <span>
+              Resolved comments hidden ·{' '}
+              <button type="button" onClick={() => setPrefs({ hideResolved: false })} className="text-accent cursor-pointer">
+                show
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+      <StrayComments snapshot={snapshot} />
+      {files.length === 0 && <div className="text-muted">{hiddenUncommented > 0 ? 'No remaining files have comments.' : 'All files are viewed. 🎉'}</div>}
+      {files.map((f) => (
+        <FileSection key={f.path} snapshot={snapshot} file={f} threadCount={threadsForFile(snapshot, f.path).length} />
+      ))}
+    </div>
+  );
+}
+
+function ReadOnlyFile({ snapshot, path }: { snapshot: PrSnapshot; path: string }) {
+  const content = useFileContent(snapshot.key, snapshot.details.headRefOid, 'head', path);
+  const [selection, setSelection] = useState<SelectedLineRange | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const view = useRef<HTMLDivElement>(null);
+  useFocusLine(snapshot.key, path, view, true, (line) => {
+    setSelection({ start: line, end: line });
+    setDone(null);
+  });
+  const a = selection ? Math.min(selection.start, selection.end) : 0;
+  const b = selection ? Math.max(selection.start, selection.end) : 0;
+  const permalink = `https://github.com/${snapshot.ref.owner}/${snapshot.ref.repo}/blob/${snapshot.details.headRefOid}/${path}#L${a}${b !== a ? `-L${b}` : ''}`;
+  const quote = () => {
+    const lines = (content?.contents ?? '').split('\n').slice(a - 1, b);
+    const ext = path.split('.').pop() ?? '';
+    appendToSummary(snapshot.key, `${path} lines ${a}–${b}:\n\n\`\`\`${ext}\n${lines.join('\n')}\n\`\`\`\n${permalink}`);
+    setDone('Quoted into your review summary.');
+  };
+  const appearance = useDiffAppearance();
+  const wordWrap = usePrefs((p) => p.wordWrap);
+  const options = useMemo(
+    () => ({
+      ...appearance,
+      disableFileHeader: true,
+      enableLineSelection: true,
+      overflow: wordWrap ? ('wrap' as const) : ('scroll' as const),
+      onLineSelected: (r: SelectedLineRange | null) => {
+        setSelection(r);
+        setDone(null);
+      },
+    }),
+    [appearance, wordWrap],
+  );
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted text-[12px]">
+        <span className="font-mono text-strong">{path}</span>
+        <span className="flex-1" />
+        <span>
+          at head <span className="font-mono text-fg">{snapshot.details.headRefOid.slice(0, 7)}</span> · not part of this PR · read-only
+        </span>
+      </div>
+      <div className="flex items-start gap-3 px-3 py-2.5 rounded-[9px] bg-info-subtle border border-info-line">
+        <Icon name="info" size={16} className="text-info mt-0.5" />
+        <span className="flex-1 text-fg leading-snug">
+          This file isn't in the PR, so GitHub can't take line comments here. Select lines to quote them into your review summary or copy a permalink.
+        </span>
+      </div>
+      {selection && (
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-raised-2 border border-chip-on-line">
+          <span className="font-semibold">{a === b ? `Line ${a}` : `Lines ${a}–${b}`}</span>
+          <span className="text-muted">not in this PR, no comments</span>
+          <span className="flex-1" />
+          {done && <span className="text-add text-[12px]">{done}</span>}
+          <Button size="sm" variant="primary" onClick={quote}>
+            Quote in review summary
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              void navigator.clipboard.writeText(permalink);
+              setDone('Permalink copied.');
+            }}
+          >
+            Copy permalink
+          </Button>
+        </div>
+      )}
+      <div ref={view} className="border border-line-2 rounded-[9px] bg-panel overflow-hidden">
+        {!content ? (
+          <div className="p-4">
+            <Spinner label="Loading…" />
+          </div>
+        ) : content.missing ? (
+          <div className="p-4 text-muted">File not found at head.</div>
+        ) : content.binary ? (
+          <div className="p-4 text-muted">Binary file.</div>
+        ) : (
+          <PierreFile file={{ name: path, contents: content.contents, cacheKey: `${snapshot.details.headRefOid}:${path}` }} options={options} selectedLines={selection} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Content({ snapshot, active }: { snapshot: PrSnapshot; active: boolean }) {
+  const ui = usePrUi(snapshot.key);
+  const scroller = useRef<HTMLDivElement | null>(null);
+  // The search text is marked in the code on screen, while the search sidebar has a query.
+  useSearchHighlights(scroller, snapshot.key, active);
+  const tab = ui.contentTabs.find((t) => t.id === ui.activeContent) ?? ui.contentTabs[0]!;
+  const changed = tab.kind === 'file' ? snapshot.files.find((f) => f.path === tab.path) : undefined;
+  return (
+    <div className="h-full flex flex-col min-w-0">
+      <ContentTabs snapshot={snapshot} />
+      <div ref={scroller} className="flex-1 overflow-y-auto">
+        {tab.kind === 'changes' && <AllChanges snapshot={snapshot} />}
+        {tab.kind === 'file' && changed && (
+          <div className="p-4">
+            <FullFileDiff snapshot={snapshot} file={changed} />
+          </div>
+        )}
+        {tab.kind === 'file' && !changed && <ReadOnlyFile snapshot={snapshot} path={tab.path} />}
+      </div>
+    </div>
+  );
+}
+
+/** The left sidebar: the file tree, or Find in files (⌘⇧F). Both stay mounted, so each keeps its state. */
+function Sidebar({ snapshot }: { snapshot: PrSnapshot }) {
+  const key = snapshot.key;
+  const sidebar = usePrUi(key).sidebar;
+  const tab = (id: 'files' | 'search', label: string, icon: 'file' | 'search', title: string) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={sidebar === id}
+      title={title}
+      onClick={() => updateUi(key, (u) => (id === 'search' ? { sidebar: id, searchFocusSeq: u.searchFocusSeq + 1 } : { sidebar: id }))}
+      className={cx(
+        'relative flex items-center gap-1.5 h-8 px-2.5 text-[12.5px] font-semibold cursor-pointer',
+        sidebar === id ? 'text-strong after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:bg-accent' : 'text-muted hover:text-fg',
+      )}
+    >
+      <Icon name={icon} size={13} />
+      {label}
+    </button>
+  );
+  return (
+    <div className="h-full flex flex-col bg-side">
+      <div role="tablist" aria-label="Sidebar" className="flex gap-1 px-1.5 border-b border-line flex-none">
+        {tab('files', 'Files', 'file', 'Files (⇧⌘E)')}
+        {tab('search', 'Search', 'search', 'Find in files (⇧⌘F)')}
+      </div>
+      <div className={cx('flex-1 min-h-0', sidebar !== 'files' && 'hidden')}>
+        <FileTree snapshot={snapshot} />
+      </div>
+      <div className={cx('flex-1 min-h-0', sidebar !== 'search' && 'hidden')}>
+        <SearchPanel snapshot={snapshot} visible={sidebar === 'search'} />
+      </div>
+    </div>
+  );
+}
+
+const SEPARATOR = 'w-px bg-line hover:bg-accent data-[separator=active]:bg-accent transition-colors';
+
+function CheatSheet({ onClose }: { onClose(): void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-labelledby="keys-h" className="w-[420px] rounded-xl bg-raised border border-line-2 shadow-2xl p-4">
+        <div className="flex items-center mb-3">
+          <h2 id="keys-h" className="text-[15px] font-bold text-strong">
+            Keyboard shortcuts
+          </h2>
+          <span className="flex-1" />
+          <button type="button" aria-label="Close" onClick={onClose} className="text-muted hover:text-fg cursor-pointer">
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+        <dl className="grid grid-cols-[110px_1fr] gap-y-1.5">
+          {SHORTCUTS.map(([k, d]) => (
+            <div key={k} className="contents">
+              <dt>
+                <Kbd>{k}</Kbd>
+              </dt>
+              <dd className="text-fg">{d}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; active?: boolean }) {
+  const ui = usePrUi(snapshot.key);
+  const [help, setHelp] = useState(false);
+  const toggleHelp = useCallback(() => setHelp((h) => !h), []);
+  useReviewKeys(snapshot, active && !help, toggleHelp);
+  const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['conversations'] : [])];
+  const layout = useDefaultLayout({ id: `files-${snapshot.role}`, panelIds });
+  return (
+    <>
+    {help && <CheatSheet onClose={() => setHelp(false)} />}
+    <Group orientation="horizontal" className="h-full" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+      {ui.showTree && (
+        <>
+          <Panel id="tree" defaultSize="22" minSize={200} maxSize="45">
+            <Sidebar snapshot={snapshot} />
+          </Panel>
+          <Separator className={SEPARATOR} />
+        </>
+      )}
+      <Panel id="content" minSize={420}>
+        <Content snapshot={snapshot} active={active} />
+      </Panel>
+      {ui.showPanel && (
+        <>
+          <Separator className={SEPARATOR} />
+          <Panel id="conversations" defaultSize="22" minSize={240} maxSize="40">
+            <ConversationsPanel snapshot={snapshot} />
+          </Panel>
+        </>
+      )}
+    </Group>
+    </>
+  );
+}

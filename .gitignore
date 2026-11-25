@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+eval/
+test-results/
+playwright-report/
+.DS_Store
+
+# Local working notes: they describe private repositories.
+plan.md
+research.md

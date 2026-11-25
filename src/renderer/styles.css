@@ -1,0 +1,382 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+@import './themes.css';
+
+/* Tailwind colours read the --c-* palette of the nearest data-theme element (themes.css), so a theme also applies to a preview. */
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-titlebar: var(--c-titlebar);
+  --color-panel: var(--c-panel);
+  --color-side: var(--c-side);
+  --color-subtle: var(--c-subtle);
+  --color-inset: var(--c-inset);
+  --color-raised: var(--c-raised);
+  --color-raised-2: var(--c-raised-2);
+  --color-card: var(--c-card);
+  --color-line: var(--c-line);
+  --color-line-2: var(--c-line-2);
+  --color-fg: var(--c-fg);
+  --color-strong: var(--c-strong);
+  --color-muted: var(--c-muted);
+  --color-soft: var(--c-soft);
+  --color-faint: var(--c-faint);
+  --color-dim: var(--c-dim);
+  --color-accent: var(--c-accent);
+  --color-ink: var(--c-ink);
+  --color-link: var(--c-link);
+  --color-add: var(--c-add);
+  --color-add-bg: var(--c-add-bg);
+  --color-add-soft: var(--c-add-soft);
+  --color-add-strong: var(--c-add-strong);
+  --color-del: var(--c-del);
+  --color-del-bg: var(--c-del-bg);
+  --color-del-soft: var(--c-del-soft);
+  --color-del-subtle: var(--c-del-subtle);
+  --color-del-line: var(--c-del-line);
+  --color-del-strong: var(--c-del-strong);
+  --color-mod: var(--c-mod);
+  --color-warn: var(--c-warn);
+  --color-warn-bg: var(--c-warn-bg);
+  --color-warn-subtle: var(--c-warn-subtle);
+  --color-warn-line: var(--c-warn-line);
+  --color-warn-strong: var(--c-warn-strong);
+  --color-warn-soft: var(--c-warn-soft);
+  --color-info: var(--c-info);
+  --color-info-bg: var(--c-info-bg);
+  --color-info-subtle: var(--c-info-subtle);
+  --color-info-line: var(--c-info-line);
+  --color-purple: var(--c-purple);
+  --color-purple-bg: var(--c-purple-bg);
+  --color-branch: var(--c-branch);
+  --color-branch-bg: var(--c-branch-bg);
+  --color-sel: var(--c-sel);
+  --color-active: var(--c-active);
+  --color-hover: var(--c-hover);
+  --color-btn-hover: var(--c-btn-hover);
+  --color-chip: var(--c-chip);
+  --color-chip-on: var(--c-chip-on);
+  --color-chip-on-line: var(--c-chip-on-line);
+  --color-success: var(--c-success);
+  --color-danger: var(--c-danger);
+  --color-attention: var(--c-attention);
+  --color-done: var(--c-done);
+  --color-neutral: var(--c-neutral);
+  --color-success-emphasis: var(--c-success-emphasis);
+  --color-danger-emphasis: var(--c-danger-emphasis);
+  --color-done-emphasis: var(--c-done-emphasis);
+  --color-neutral-emphasis: var(--c-neutral-emphasis);
+}
+
+@theme {
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Review comments, replies and the comment editor; the size comes from Settings (--comment-font-size). */
+@utility text-comment {
+  font-size: var(--comment-font-size, 14px);
+}
+
+/* Our own code snippets (thread previews, Overview context) follow the code size from Settings too. */
+@utility text-code {
+  font-size: var(--code-font-size, 13px);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  /* Pierre's diffs and files use the code font from Settings (inherited into their shadow DOM). */
+  :root {
+    --diffs-font-family: var(--font-mono);
+  }
+
+  /* clip, not hidden: scrollIntoView can still scroll an overflow:hidden root and shift the whole window. */
+  html,
+  body,
+  #root {
+    overflow: clip;
+  }
+
+  body {
+    margin: 0;
+    background: var(--c-bg);
+    color: var(--c-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-scroll);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Comment and description Markdown, following github.com's markdown-body measurements; colours come from the theme. */
+.markdown {
+  --md-border: var(--c-line-2);
+  --md-border-muted: var(--c-line);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.markdown > :first-child {
+  margin-top: 0 !important;
+}
+.markdown > :last-child {
+  margin-bottom: 0 !important;
+}
+.markdown p,
+.markdown blockquote,
+.markdown ul,
+.markdown ol,
+.markdown dl,
+.markdown table,
+.markdown pre,
+.markdown details,
+.markdown .highlight,
+.markdown .mermaid-diagram {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin-top: 1.5em;
+  margin-bottom: 1em;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--c-strong);
+}
+.markdown h1 {
+  font-size: 2em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--md-border-muted);
+}
+.markdown h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--md-border-muted);
+}
+.markdown h3 {
+  font-size: 1.25em;
+}
+.markdown h4 {
+  font-size: 1em;
+}
+.markdown h5 {
+  font-size: 0.875em;
+}
+.markdown h6 {
+  font-size: 0.85em;
+  color: var(--c-muted);
+}
+.markdown a {
+  color: var(--c-link);
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
+.markdown strong {
+  font-weight: 600;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 2em;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+.markdown ul ul,
+.markdown ul ol,
+.markdown ol ol,
+.markdown ol ul {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.markdown li + li {
+  margin-top: 0.25em;
+}
+.markdown li > p {
+  margin-top: 1em;
+}
+.markdown .task-list-item {
+  list-style-type: none;
+}
+.markdown .task-list-item input[type='checkbox'] {
+  margin: 0 0.2em 0.25em -1.4em;
+  vertical-align: middle;
+  accent-color: var(--c-accent);
+}
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 85%;
+  padding: 0.2em 0.4em;
+  margin: 0;
+  white-space: break-spaces;
+  border-radius: 6px;
+  background: var(--c-md-code);
+}
+.markdown pre {
+  font-family: var(--font-mono);
+  font-size: 85%;
+  line-height: 1.45;
+  padding: 1em;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--c-subtle);
+}
+.markdown pre code {
+  font-size: 100%;
+  padding: 0;
+  white-space: pre;
+  background: transparent;
+  border: 0;
+}
+.markdown .highlight pre {
+  margin-bottom: 0;
+}
+.markdown blockquote {
+  padding: 0 1em;
+  color: var(--c-muted);
+  border-left: 0.25em solid var(--md-border);
+}
+.markdown hr {
+  height: 0.25em;
+  margin: 1.5em 0;
+  padding: 0;
+  border: 0;
+  background: var(--md-border);
+}
+.markdown img {
+  max-width: 100%;
+  box-sizing: content-box;
+}
+.markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+.markdown th {
+  font-weight: 600;
+}
+.markdown th,
+.markdown td {
+  padding: 6px 13px;
+  border: 1px solid var(--md-border);
+}
+.markdown tr {
+  border-top: 1px solid var(--md-border-muted);
+}
+.markdown tr:nth-child(2n) {
+  background: var(--c-subtle);
+}
+.markdown .blob-wrapper td.blob-num {
+  display: none;
+}
+.markdown .js-suggested-changes-blob .blob-code-deletion {
+  background: var(--c-del-soft);
+}
+.markdown .js-suggested-changes-blob .blob-code-addition {
+  background: var(--c-add-soft);
+}
+
+.markdown .mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 0 0 1em;
+  padding: 12px;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  background: var(--c-panel);
+  overflow-x: auto;
+}
+
+.markdown .mermaid-error {
+  margin: 8px 0;
+  color: var(--c-warn);
+  font-size: 12px;
+}
+
+/*
+ * Syntax colours for code blocks in comments and descriptions. GitHub's HTML already marks the tokens with its
+ * `pl-*` classes (for every language github.com highlights); each theme sets the colours (--pl-* in themes.css).
+ */
+.markdown .pl-c { color: var(--pl-comment); }
+.markdown .pl-c1,
+.markdown .pl-s .pl-v { color: var(--pl-constant); }
+.markdown .pl-e,
+.markdown .pl-en { color: var(--pl-entity); }
+.markdown .pl-smi,
+.markdown .pl-s .pl-s1 { color: var(--pl-plain); }
+.markdown .pl-ent { color: var(--pl-tag); }
+.markdown .pl-k { color: var(--pl-keyword); }
+.markdown .pl-s,
+.markdown .pl-pds,
+.markdown .pl-s .pl-pse .pl-s1,
+.markdown .pl-sr,
+.markdown .pl-sr .pl-cce,
+.markdown .pl-sr .pl-sre,
+.markdown .pl-sr .pl-sra { color: var(--pl-string); }
+.markdown .pl-v,
+.markdown .pl-smw { color: var(--pl-variable); }
+.markdown .pl-sg { color: var(--pl-comment); }
+.markdown .pl-bu { color: var(--pl-unmatched); }
+.markdown .pl-ii { color: var(--pl-invalid-fg); background-color: var(--pl-invalid-bg); }
+.markdown .pl-c2 { color: var(--pl-invalid-fg); background-color: var(--pl-cr-bg); }
+.markdown .pl-sr .pl-cce { font-weight: bold; color: var(--pl-regexp); }
+.markdown .pl-ml { color: var(--pl-list); }
+.markdown .pl-mh,
+.markdown .pl-mh .pl-en,
+.markdown .pl-ms { font-weight: bold; color: var(--pl-heading); }
+.markdown .pl-mi { font-style: italic; color: var(--pl-plain); }
+.markdown .pl-mb { font-weight: bold; color: var(--pl-plain); }
+.markdown .pl-md { color: var(--pl-deleted-fg); background-color: var(--pl-deleted-bg); }
+.markdown .pl-mi1 { color: var(--pl-inserted-fg); background-color: var(--pl-inserted-bg); }
+.markdown .pl-mc { color: var(--pl-changed-fg); background-color: var(--pl-changed-bg); }
+.markdown .pl-mi2 { color: var(--pl-ignored-fg); background-color: var(--pl-ignored-bg); }
+.markdown .pl-mdr { font-weight: bold; color: var(--pl-range); }
+.markdown .pl-ba { color: var(--pl-angle); }
+.markdown .pl-corl { text-decoration: underline; color: var(--pl-string); }
