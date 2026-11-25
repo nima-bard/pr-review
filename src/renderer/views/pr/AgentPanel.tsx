@@ -39,6 +39,11 @@ export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: Pr
         <span className="text-[12px] font-semibold text-strong truncate" title={requestLabel(turn.request)}>
           {turn.agent} · {requestLabel(turn.request, { fileName: true })}
         </span>
+        {turn.branch && (
+          <span className="inline-flex" title="Asked while another request was using this pull request's session, so it ran beside it: it knew the conversation so far, but this question and answer aren't in the session Claude Desktop opens.">
+            <Badge tone="purple">Side branch</Badge>
+          </span>
+        )}
         <span className="flex-1" />
         {target && (
           // To the asked lines: their marker if it's still shown, else the file.
@@ -152,6 +157,8 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
     action().catch((err: unknown) => setError(errorText(err)));
   };
   const busy = turns.some((t) => t.status === 'running');
+  // Only a request on the PR's own session keeps Claude Desktop from opening it; side branches don't write to it.
+  const sessionBusy = turns.some((t) => t.status === 'running' && !t.branch);
 
   return (
     <aside aria-label="Agent" className="w-[420px] flex-none flex flex-col bg-side border-l border-line min-h-0">
@@ -184,8 +191,8 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
           <div ref={list} className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
             {turns.length === 0 && (
               <div className="text-[12.5px] text-muted leading-relaxed">
-                Every request about this pull request goes to the same {agent.name} session: reviews, questions on a line (“Ask” in a comment), and what you type below. Comments it writes go into your review on their
-                lines, as drafts you can edit or delete before you submit.
+                Every request about this pull request goes to the same {agent.name} session: reviews, questions on a line (“Ask” in a comment), and what you type below. Ask again while it’s still answering: the
+                new request runs beside it, so you don’t wait. Comments it writes go into your review on their lines, as drafts you can edit or delete before you submit.
               </div>
             )}
             {turns.map((t) => (
@@ -212,14 +219,16 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
               {agent.kind === 'claude-code' && session?.started && (
                 <Button
                   size="sm"
-                  disabled={busy}
+                  disabled={sessionBusy}
                   title={`This pull request's conversation in Claude Desktop, always the same session (named “PR #${snapshot.ref.number}”). Continue it there or here, one at a time.`}
                   onClick={() => run(() => api.openAgentInDesktop(key))}
                 >
                   Open in Claude Desktop
                 </Button>
               )}
-              <span className={cx('flex-1 text-[11.5px] text-muted', turns.some((t) => t.status === 'queued') ? '' : 'invisible')}>Requests run one at a time.</span>
+              <span className={cx('flex-1 text-[11.5px] text-muted', turns.some((t) => t.status === 'queued') ? '' : 'invisible')} title="Settings › Agents › Requests at once">
+                Waiting for a free place: the others are still running.
+              </span>
               <Button size="sm" variant="primary" disabled={!text.trim()} onClick={() => void send()}>
                 Send
               </Button>

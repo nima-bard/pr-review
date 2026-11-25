@@ -36,19 +36,21 @@ const STDERR_LIMIT = 4000;
 
 /**
  * Claude Code, headless: one `claude -p` per turn in the PR's worktree, on the PR's one session (`--session-id` the
- * first time, `--resume` after), named after the PR so Claude Desktop lists it as "PR #12 · Title". No --bare: the
- * review needs your skills, hooks and CLAUDE.md. The prompt goes in on stdin; the answer streams back as stream-json.
+ * first time, `--resume` after), named after the PR so Claude Desktop lists it as "PR #12 · Title"; or, while that
+ * session is busy, on a side branch of it (`--resume … --fork-session`). No --bare: the review needs your skills, hooks
+ * and CLAUDE.md. The prompt goes in on stdin; the answer streams back as stream-json.
  */
 export const claudeCode: Connector = {
   start(ctx, update) {
     const { connector } = ctx;
-    const title = sessionTitle(ctx.env.PR_NUMBER, ctx.env.PR_TITLE);
+    // Only the PR's own session carries its name; a side branch stays unnamed, so Desktop's list doesn't repeat it.
+    const title = ctx.main ? sessionTitle(ctx.env.PR_NUMBER, ctx.env.PR_TITLE) : null;
     const args = [
       '-p',
       '--output-format',
       'stream-json',
       '--verbose',
-      ...(ctx.resume ? ['--resume', ctx.sessionId!] : ['--session-id', ctx.sessionId!]),
+      ...(ctx.resume ? ['--resume', ctx.sessionId!, ...(ctx.fork ? ['--fork-session'] : [])] : ['--session-id', ctx.sessionId!]),
       ...(title ? ['--name', title] : []),
       '--mcp-config',
       JSON.stringify({ mcpServers: { 'pr-review': { type: 'http', url: ctx.mcp.url, headers: ctx.mcp.headers } } }),

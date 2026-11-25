@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalApp: '',
   mcpPort: 47823,
   agents: [],
+  agentParallel: 3,
 };
 
 export interface ManualPlacement {

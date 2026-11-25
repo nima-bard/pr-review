@@ -6,6 +6,9 @@ import type { Connector, RunningTurn, TurnUpdate } from './connector';
 /** Kinds that keep a Claude Code session across requests (the others start fresh each time). */
 const SESSION_KINDS: readonly AgentConnector['kind'][] = ['claude-code', 'claude-terminal'];
 
+/** The most requests one pull request runs at once, whatever Settings says. */
+const MAX_PARALLEL = 8;
+
 export interface AgentRunnerDeps {
   appState: AppState;
   emit(key: string, session: AgentSession): void;
@@ -18,13 +21,18 @@ export interface AgentRunnerDeps {
 
 interface PrAgent {
   session: AgentSession;
-  running: { turnId: string; turn: RunningTurn } | null;
+  /** Requests started or running, by turn id (null while one is still starting). */
+  active: Map<string, RunningTurn | null>;
+  /** The request using the PR's own session, if any: only one may write to it at a time. */
+  mainTurnId: string | null;
+  /** Stop was pressed while a request was still starting: it stops as soon as it has started. */
+  stopRequested: Set<string>;
 }
 
 /**
- * The agent conversations, one per PR: every request continues the PR's session, one at a time (two writers on one
- * Claude Code session can lose messages), in the order they were sent. Persisted per PR, so the conversation is still
- * there after a restart.
+ * The agent conversations, one per PR, persisted so they're still there after a restart. Requests run at once, up to
+ * Settings' `agentParallel`: one at a time on the PR's own session (two writers on one Claude Code session can lose
+ * messages), and the others beside it as side branches of that session, so asking never waits for the request before.
  */
 export class AgentRunner {
   private readonly prs = new Map<string, Promise<PrAgent>>();
@@ -47,7 +55,7 @@ export class AgentRunner {
     for (const t of session.turns) {
       if (t.status === 'queued' || t.status === 'running') Object.assign(t, { status: 'stopped', endedAt: t.endedAt ?? t.startedAt, error: 'PR Review quit while this ran.' });
     }
-    return { session, running: null };
+    return { session, active: new Map(), mainTurnId: null, stopRequested: new Set() };
   }
 
   private async newSession(connectorId?: string, turns: AgentTurn[] = []): Promise<AgentSession> {
@@ -77,7 +85,7 @@ export class AgentRunner {
     return structuredClone((await this.agent(key)).session);
   }
 
-  /** Queues a request; it runs when the one before it ends. */
+  /** Adds a request; it starts at once unless the PR already runs as many as Settings allows. */
   async ask(key: string, request: AgentRequest): Promise<void> {
     const pr = await this.agent(key);
     const connector = await this.connectorOf(pr);
@@ -100,20 +108,43 @@ export class AgentRunner {
     void this.pump(key, pr);
   }
 
-  /** Runs the next queued turn, if none is running. */
+  /**
+   * Starts waiting requests, oldest first, while there's room. The PR's own session takes one when it's free; the
+   * others become side branches. A live terminal session takes one at a time, since it is a single conversation.
+   */
   private async pump(key: string, pr: PrAgent): Promise<void> {
-    if (pr.running) return;
-    const turn = pr.session.turns.find((t) => t.status === 'queued');
-    if (!turn) return;
+    const [{ agentParallel }, connector] = await Promise.all([this.deps.appState.settings(), this.connectorOf(pr).catch(() => null)]);
+    const limit = connector?.kind === 'claude-terminal' ? 1 : Math.min(MAX_PARALLEL, Math.max(1, Math.round(agentParallel) || 1));
+    for (const turn of pr.session.turns) {
+      if (pr.active.size >= limit) return;
+      if (turn.status !== 'queued' || pr.active.has(turn.id)) continue;
+      // Claimed before anything is awaited, so two pumps never start the same request.
+      const main = pr.mainTurnId === null;
+      if (main) pr.mainTurnId = turn.id;
+      pr.active.set(turn.id, null);
+      void this.run(key, pr, turn, main);
+    }
+  }
+
+  /** Runs one request, on the PR's session (`main`) or a side branch of it, and frees its place when it ends. */
+  private async run(key: string, pr: PrAgent, turn: AgentTurn, main: boolean): Promise<void> {
     const update = (patch: TurnUpdate) => {
       Object.assign(turn, patch);
       this.publish(key, pr);
     };
+    const release = () => {
+      pr.active.delete(turn.id);
+      pr.stopRequested.delete(turn.id);
+      if (pr.mainTurnId === turn.id) pr.mainTurnId = null;
+    };
     let running: RunningTurn;
+    let side = false;
     try {
       const connector = await this.connectorOf(pr);
       const [prepared, mcp] = await Promise.all([this.deps.prepare(key, turn.request), this.deps.mcp()]);
       const { session } = pr;
+      // A side branch knows the conversation so far (a fork of the session), or starts fresh if there's none yet.
+      side = !main && connector.kind === 'claude-code';
       running = this.deps.connector(connector.kind).start(
         {
           turnId: turn.id,
@@ -121,26 +152,31 @@ export class AgentRunner {
           connector,
           request: turn.request,
           ...prepared,
-          sessionId: session.sessionId,
+          sessionId: side && !session.started ? randomUUID() : session.sessionId,
           resume: session.started,
+          fork: side && session.started,
+          main: !side,
           mcp: { url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}`, 'X-PR-Review-Pr': key, 'X-PR-Review-Turn': turn.id, 'X-PR-Review-Agent': connector.name } },
         },
         update,
       );
     } catch (err) {
+      release();
       Object.assign(turn, { status: 'failed', error: err instanceof Error ? err.message : String(err), endedAt: new Date().toISOString() });
       this.publish(key, pr, true);
       void this.pump(key, pr);
       return;
     }
-    pr.running = { turnId: turn.id, turn: running };
+    pr.active.set(turn.id, running);
+    if (pr.stopRequested.has(turn.id)) running.stop();
+    if (side) turn.branch = true;
     if (turn.status === 'queued') update({ status: 'running' });
     const { sessionId } = await running.done;
-    pr.running = null;
+    release();
     turn.endedAt = new Date().toISOString();
     const { session } = pr;
-    // The session exists once the agent reported it (even if the turn failed later) or the turn went through.
-    if (session.sessionId && (sessionId || turn.status === 'done' || turn.status === 'handed-off')) {
+    // The PR's session exists once the agent reported it (even if the turn failed later) or the turn went through.
+    if (!side && session.sessionId && (sessionId || turn.status === 'done' || turn.status === 'handed-off')) {
       // Claude Code may report another id (it continued in a copy): the PR's conversation goes on there.
       if (sessionId && sessionId !== session.sessionId) session.sessionId = sessionId;
       session.started = true;
@@ -151,8 +187,10 @@ export class AgentRunner {
 
   async stop(key: string, turnId: string): Promise<void> {
     const pr = await this.agent(key);
-    if (pr.running?.turnId === turnId) {
-      pr.running.turn.stop();
+    if (pr.active.has(turnId)) {
+      const running = pr.active.get(turnId);
+      if (running) running.stop();
+      else pr.stopRequested.add(turnId);
       return;
     }
     const turn = pr.session.turns.find((t) => t.id === turnId);
@@ -183,16 +221,16 @@ export class AgentRunner {
   /** Switches the PR to another connector: a new session (the conversation so far stays listed). */
   async setConnector(key: string, connectorId: string): Promise<void> {
     const pr = await this.agent(key);
-    if (pr.running) throw new Error('Wait for the running request to finish, or stop it, before switching agents.');
+    if (pr.active.size > 0) throw new Error('Wait for the running requests to finish, or stop them, before switching agents.');
     Object.assign(pr.session, await this.newSession(connectorId, pr.session.turns));
     this.publish(key, pr, true);
   }
 
-  /** The PR's Claude Code session, for "Open in Claude Desktop": it must exist and nothing may be writing to it. */
+  /** The PR's Claude Code session, for "Open in Claude Desktop": it must exist and no request may be writing to it. */
   async desktopSession(key: string): Promise<string> {
-    const { session, running } = await this.agent(key);
+    const { session, mainTurnId } = await this.agent(key);
     if (!session.sessionId || !session.started) throw new Error('There is no Claude Code session for this pull request yet. Ask something first.');
-    if (running) throw new Error('Claude is still working on a request. Wait for it to finish, or stop it, then open the session in Claude Desktop.');
+    if (mainTurnId) throw new Error('Claude is still answering in this pull request’s session. Wait for it to finish, or stop it, then open the session in Claude Desktop.');
     return session.sessionId;
   }
 
@@ -207,6 +245,6 @@ export class AgentRunner {
 
   /** Stops every running turn (the app is quitting). */
   stopAll(): void {
-    for (const pr of this.prs.values()) void pr.then((p) => p.running?.turn.stop());
+    for (const pr of this.prs.values()) void pr.then((p) => p.active.forEach((running) => running?.stop()));
   }
 }

@@ -517,6 +517,11 @@ export interface Settings {
   mcpPort: number;
   /** Agents the app can ask; the first is the default. Empty until you set one up. */
   agents: AgentConnector[];
+  /**
+   * How many agent requests run at once for one pull request (1–8). One uses the PR's session; while it's busy, the
+   * others run beside it as side branches of the conversation, so asking never waits for the request before.
+   */
+  agentParallel: number;
 }
 
 /** An agent the app can ask (Settings › Agents). */
@@ -565,6 +570,11 @@ export interface AgentTurn {
   error: string | null;
   /** A line ask whose marker you removed from the diff (the request stays in the Agent panel); saved, so it stays away. */
   markerHidden?: boolean;
+  /**
+   * Ran beside the PR's session because another request was using it: a side branch that knows the conversation so
+   * far, but whose question and answer aren't added to the session (nor to Claude Desktop's copy of it).
+   */
+  branch?: boolean;
 }
 
 /** A PR's agent conversation: every request continues the same session. */

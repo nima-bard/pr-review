@@ -151,6 +151,7 @@ function McpServerBox({ port, onPort }: { port: number; onPort(port: number): vo
 export function AgentsSettings() {
   const [connectors, setConnectors] = useState<AgentConnector[] | null>(null);
   const [port, setPort] = useState(0);
+  const [parallel, setParallel] = useState(3);
   const [editing, setEditing] = useState<string | null>(null);
   const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -160,12 +161,13 @@ export function AgentsSettings() {
     void api.getSettings().then((s) => {
       setConnectors(s.agents);
       setPort(s.mcpPort);
+      setParallel(s.agentParallel);
     });
     void api.mcpStatus().then((s) => setClaudeInstalled(s.claudeInstalled));
   }, []);
 
   /** Saves these settings over the latest saved ones (the rest of Settings saves separately). */
-  const save = (patch: { agents?: AgentConnector[]; mcpPort?: number }, wait = 400) => {
+  const save = (patch: { agents?: AgentConnector[]; mcpPort?: number; agentParallel?: number }, wait = 400) => {
     setSettingsStatus('Saving…');
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
@@ -281,6 +283,30 @@ export function AgentsSettings() {
           </Button>
         ))}
       </div>
+      {connectors.length > 0 && (
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-semibold text-strong">Requests at once</span>
+          <span className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={parallel}
+              onChange={(e) => {
+                const next = Math.min(8, Math.max(1, Math.round(Number(e.target.value)) || 1));
+                setParallel(next);
+                save({ agentParallel: next });
+              }}
+              className={cx(INPUT, 'w-[80px]')}
+            />
+            <span className="text-[12px] text-muted">per pull request</span>
+          </span>
+          <span className="text-[11.5px] text-muted leading-relaxed">
+            Ask again while Claude is still answering: one request uses the pull request’s session (the one Claude Desktop opens), the others run beside it as side branches that know the conversation so far.
+            Each uses the agent’s model above. More at once means more usage.
+          </span>
+        </label>
+      )}
       <McpServerBox
         port={port}
         onPort={(next) => {

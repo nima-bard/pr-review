@@ -14,6 +14,13 @@ export interface TurnContext {
   sessionId: string | null;
   /** The session exists: continue it (--resume) instead of starting it (--session-id). */
   resume: boolean;
+  /**
+   * A side branch, while another request uses the PR's session: resume it as a new branch (--fork-session), so the
+   * answer knows the conversation but isn't written into it. False for the PR's own session (and a fresh side session).
+   */
+  fork: boolean;
+  /** Writes to the PR's own session (named after the PR); false for side branches, which stay unnamed. */
+  main: boolean;
   /** The MCP server's URL and the headers that tie this turn's calls to it. */
   mcp: { url: string; headers: Record<string, string> };
 }
