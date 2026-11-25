@@ -45,7 +45,7 @@ function ConnectorEditor({ connector, onChange, onDone }: { connector: AgentConn
             className="px-2.5 py-2 rounded-md bg-side border border-line-2 focus:border-accent outline-none font-mono text-[12.5px] resize-y"
           />
           <span className="text-[11.5px] text-muted">
-            Use <code className="font-mono">"$PR_PROMPT"</code> in double quotes. For its comments to arrive as suggestions, give the agent PR Review’s MCP server (below).
+            Use <code className="font-mono">"$PR_PROMPT"</code> in double quotes. For its comments to go into your review, give the agent PR Review’s MCP server (below).
           </span>
         </label>
       )}
@@ -94,7 +94,7 @@ function McpServerBox({ port, onPort }: { port: number; onPort(port: number): vo
         {status.claudeCodeRegistered && <Badge tone="info">Connected to Claude Code</Badge>}
       </span>
       <span className="text-[12px] text-muted leading-relaxed">
-        Agents use it to read the pull requests open here and add comments to your review as suggestions. It only listens on this Mac, asks for a token, and can’t post anything to GitHub.
+        Agents use it to read the pull requests open here and add draft comments to your review. It only listens on this Mac, asks for a token, and can’t post anything to GitHub.
       </span>
       <code className="font-mono text-[12px] text-fg">{status.url}</code>
       {status.error && <ErrorBox message={status.error} />}
@@ -218,7 +218,7 @@ export function AgentsSettings() {
           <span className="font-semibold text-strong">Review with Claude</span>
           <span className="text-[12.5px] text-fg leading-relaxed">
             Claude reviews a pull request with your skills and guidelines, answers questions about a line, and keeps one conversation per pull request that you can open in Claude Desktop. Requests run straight away
-            on your Claude Code. Its comments arrive here as suggestions; nothing goes to GitHub until you accept them and submit.
+            on your Claude Code. Its comments go into your review as drafts; nothing goes to GitHub until you submit.
           </span>
           <span className="text-[12px] text-muted">Set up Claude also adds PR Review’s MCP server (“pr-review”) to your Claude Code settings for all projects.</span>
           {claudeInstalled === false ? (

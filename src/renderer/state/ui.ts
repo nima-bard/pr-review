@@ -26,6 +26,8 @@ export interface PrUi {
   composerPrompt: { next: ComposerTarget | null } | null;
   focusPath: string | null;
   focusThread: string | null;
+  /** Another element on a line to bring into view (a draft `draft-<id>`, an ask's marker `ask-<turn id>`). */
+  focusElement: string | null;
   /** Bumped by every jump, so selecting the same file again scrolls back to it. */
   focusSeq: number;
   collapsed: Record<string, boolean>;
@@ -37,8 +39,6 @@ export interface PrUi {
   showRuns: boolean;
   /** The Agent panel: the PR's conversation with its agent (⇧⌘A). */
   showAgent: boolean;
-  /** Line asks whose marker is hidden from the diff (they stay in the Agent panel). */
-  hiddenAsks: Record<string, true>;
   /** A request the Agent panel should scroll to and highlight; `seq` repeats a jump to the same one. */
   focusTurn: { id: string; seq: number } | null;
   showVersions: boolean;
@@ -75,6 +75,7 @@ const DEFAULT_UI: PrUi = {
   composerPrompt: null,
   focusPath: null,
   focusThread: null,
+  focusElement: null,
   focusSeq: 0,
   collapsed: {},
   openComments: {},
@@ -82,7 +83,6 @@ const DEFAULT_UI: PrUi = {
   showMerge: false,
   showRuns: false,
   showAgent: false,
-  hiddenAsks: {},
   focusTurn: null,
   pendingCompare: null,
   sidebar: 'files',
@@ -199,8 +199,8 @@ export function requestComposer(key: string, next: ComposerTarget | null): void 
   updateUi(key, { composer: next, composerPrompt: null });
 }
 
-export function focusFile(key: string, path: string, threadId: string | null = null): void {
-  updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusSeq: ui.focusSeq + 1, view: 'files' }));
+export function focusFile(key: string, path: string, threadId: string | null = null, elementId: string | null = null): void {
+  updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusElement: elementId, focusSeq: ui.focusSeq + 1, view: 'files' }));
 }
 
 export interface ViewPrefs {

@@ -15,8 +15,8 @@ PR Review opens each pull request in a git worktree of a clone you already have,
 - **Find in files** (⇧⌘F), like VS Code: match case, whole word, regular expressions, files to include or exclude, results as a list or a tree.
 - **Triage.** See which threads wait for your reply and which look addressed by later changes.
 - **Act on it.** Merge with GitHub's rules and proposed commit message, request reviewers, close or reopen, switch between draft and ready.
-- **Review with Claude** (or another coding agent). Run your code review on the pull request, ask about a line from the comment editor ("Ask Claude", or start a comment with `/ask`), or type a request in the Agent panel (⇧⌘A). Every request about a pull request goes to the same Claude Code session, which you can open in Claude Desktop. Comments the agent writes arrive as suggestions on the lines: accept, edit or dismiss them; nothing goes to GitHub until you submit.
-- **An MCP server for agents.** Claude Code, Claude Desktop's Code tab, Codex, Cursor, Gemini CLI or any MCP client can read the pull requests open in the app and add comments to your review as suggestions. It listens only on this Mac and can't post to GitHub.
+- **Review with Claude** (or another coding agent). Run your code review on the pull request, ask about a line from the comment editor ("Ask Claude", or start a comment with `/ask`), or type a request in the Agent panel (⇧⌘A). Every request about a pull request goes to the same Claude Code session, which you can open in Claude Desktop. Comments the agent writes go into your review as drafts on the lines, marked "from Claude": edit or delete them like your own; nothing goes to GitHub until you submit.
+- **An MCP server for agents.** Claude Code, Claude Desktop's Code tab, Codex, Cursor, Gemini CLI or any MCP client can read the pull requests open in the app and add draft comments to your review. It listens only on this Mac and can't post to GitHub.
 - **Quick actions:** your own commands for a pull request (say, `claude "/code-review $PR_NUMBER"` or `npm test`), run in its worktree, in iTerm2 or another terminal, or in the background.
 - **Find** in the current view (⌘F), in both versions of a diff or one.
 - **Tabs** for several pull requests (drag to reorder, pop out into windows), restored when you restart.
@@ -56,7 +56,7 @@ Settings › Agents starts empty. **Set up Claude** adds Claude (Claude Code mus
 
 - **Claude Code (in the app)**, the default: one headless Claude Code session per pull request, run in its worktree with your skills and CLAUDE.md. A review may read the code and the pull request, not edit files or post to GitHub. Each reply shows its cost. **Open in Claude Desktop** continues the same conversation there; requests from the app then start a branch of it, so neither side loses messages.
 - **Claude Code (in a terminal)**: a live session in your terminal that the app pushes requests into. It uses Claude Code's channels (a research preview): your organisation must allow them (`channelsEnabled`), and Claude Code shows a warning for the development channel.
-- **Command**: any agent with a command line, such as `codex exec "$PR_PROMPT"` or `gemini -p "$PR_PROMPT"`, run in the worktree with the quick-action variables plus `PR_PROMPT` and `PR_REQUEST_FILE`. Give it the MCP server (Settings › Agents › Copy settings) for its comments to arrive as suggestions.
+- **Command**: any agent with a command line, such as `codex exec "$PR_PROMPT"` or `gemini -p "$PR_PROMPT"`, run in the worktree with the quick-action variables plus `PR_PROMPT` and `PR_REQUEST_FILE`. Give it the MCP server (Settings › Agents › Copy settings) for its comments to go into your review.
 
 The review uses your `code-review` skill: when the request says it runs inside PR Review, it adds its findings with the MCP tool `add_draft` instead of posting them.
 

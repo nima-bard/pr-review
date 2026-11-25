@@ -113,14 +113,15 @@ export interface FileContent {
   missing: boolean;
 }
 
-/** Who wrote a draft when it wasn't typed in the app: an agent through the PR Review MCP server. */
+/**
+ * Who wrote a draft when an agent did (through the PR Review MCP server). It is part of your review like your own and
+ * goes out with Submit; once you edit it, it is yours and loses its origin.
+ */
 export interface DraftOrigin {
   /** The MCP client or connector name, e.g. "Claude Code". */
   agent: string;
   /** The agent turn that asked for it, so a run's drafts can be listed or deleted together. */
   turnId: string | null;
-  /** When you accepted it; until then it is a suggestion and Submit leaves it out. */
-  acceptedAt: string | null;
 }
 
 export interface Draft {
@@ -562,6 +563,8 @@ export interface AgentTurn {
   /** In US dollars, when the agent reports it. */
   costUsd: number | null;
   error: string | null;
+  /** A line ask whose marker you removed from the diff (the request stays in the Agent panel); saved, so it stays away. */
+  markerHidden?: boolean;
 }
 
 /** A PR's agent conversation: every request continues the same session. */
@@ -569,10 +572,11 @@ export interface AgentSession {
   connectorId: string;
   /** The Claude Code session id the app chose (claude-code, claude-terminal), or null. */
   sessionId: string | null;
-  /** Whether the Claude Code session exists yet (the first run uses --session-id, later ones --resume). */
+  /**
+   * Whether the Claude Code session exists yet (the first run uses --session-id, later ones --resume). It is never
+   * branched: Claude Desktop and the app take turns on this one session, which keeps one Desktop session per PR.
+   */
   started: boolean;
-  /** Opened in Claude Desktop: the next app request forks (--fork-session), since two writers can lose messages. */
-  continuedInDesktop: boolean;
   turns: AgentTurn[];
 }
 

@@ -4,7 +4,7 @@ export interface ClaudeStreamState {
   reply: string;
   /** Tool activity worth showing ("Read src/a.ts", "Added a draft on src/a.ts:42"). */
   activity: string[];
-  /** The session the run wrote to (a new id after --fork-session). */
+  /** The session the run wrote to, as Claude Code reports it. */
   sessionId: string | null;
   costUsd: number | null;
   /** Set when the run ended with an error result. */

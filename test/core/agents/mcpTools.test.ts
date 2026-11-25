@@ -20,8 +20,9 @@ const draft = (id: string, origin?: DraftOrigin): Draft => ({
 
 /** A bridge over one open PR whose only changed file is src/a.ts (RIGHT lines 1–5 and 9, LEFT line 2). */
 function fakeBridge() {
-  const drafts: Draft[] = [draft('mine'), draft('accepted', { agent: 'Claude', turnId: null, acceptedAt: '2026-01-02T00:00:00Z' }), draft('suggested', { agent: 'Claude', turnId: 't', acceptedAt: null })];
-  const added: { input: AgentDraftInput; origin: Omit<DraftOrigin, 'acceptedAt'> }[] = [];
+  // 'mine': yours (written, or an agent's that you edited, which drops its origin); 'claude': an agent's, untouched.
+  const drafts: Draft[] = [draft('mine'), draft('claude', { agent: 'Claude', turnId: 't' })];
+  const added: { input: AgentDraftInput; origin: DraftOrigin }[] = [];
   const snap = { key: 'github.com/o/r#1', details: { url: 'https://github.com/o/r/pull/1', title: 'T' }, worktree: { path: '/wt' }, drafts } as unknown as PrSnapshot;
   const diff: FileDiffModel = { path: 'src/a.ts', oldPath: 'src/a.ts', change: 'modified', patch: '@@', binary: false, commentable: { RIGHT: [1, 2, 3, 4, 5, 9], LEFT: [2] } };
   const bridge: ReviewBridge = {
@@ -68,7 +69,7 @@ describe('PR Review MCP tools', () => {
     expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(['add_draft', 'delete_draft', 'get_file_diff', 'get_pr', 'list_drafts', 'list_open_prs', 'update_draft']);
   });
 
-  it('add_draft saves a suggestion on commentable lines, with the caller as its origin', async () => {
+  it('add_draft saves a draft on commentable lines, with the caller as its origin', async () => {
     const { bridge, added } = fakeBridge();
     const { call } = await connect(bridge);
     const res = await call('add_draft', { pr, path: 'src/a.ts', line: 4, start_line: 2, body: 'Why?' });
@@ -93,25 +94,22 @@ describe('PR Review MCP tools', () => {
     expect(await call('get_pr', { pr: 'o/x#2' })).toEqual({ isError: true, text: 'Open o/x#2 in PR Review first.' });
   });
 
-  it("update_draft and delete_draft refuse the user's drafts and accepted suggestions", async () => {
+  it("update_draft and delete_draft refuse the user's drafts, and change an agent's own", async () => {
     const { bridge, drafts } = fakeBridge();
     const { call } = await connect(bridge);
-    for (const id of ['mine', 'accepted']) {
-      expect(await call('update_draft', { pr, id, body: 'y' })).toEqual({ isError: true, text: "That draft is the user's; it can't be changed by an agent." });
-      expect((await call('delete_draft', { pr, id })).isError).toBe(true);
-    }
-    expect((await call('update_draft', { pr, id: 'suggested', body: 'y' })).isError).toBe(false);
-    expect((await call('delete_draft', { pr, id: 'suggested' })).isError).toBe(false);
-    expect(drafts.map((d) => d.id)).toEqual(['mine', 'accepted']);
+    expect(await call('update_draft', { pr, id: 'mine', body: 'y' })).toEqual({ isError: true, text: "That draft is the user's (they wrote or edited it); an agent can't change it." });
+    expect((await call('delete_draft', { pr, id: 'mine' })).isError).toBe(true);
+    expect((await call('update_draft', { pr, id: 'claude', body: 'y' })).isError).toBe(false);
+    expect((await call('delete_draft', { pr, id: 'claude' })).isError).toBe(false);
+    expect(drafts.map((d) => d.id)).toEqual(['mine']);
   });
 
-  it('list_drafts says who wrote each draft and whether it was accepted', async () => {
+  it('list_drafts says who wrote each draft', async () => {
     const { call } = await connect(fakeBridge().bridge);
-    const list = JSON.parse((await call('list_drafts', { pr })).text) as { id: string; status: string }[];
-    expect(list.map((d) => [d.id, d.status])).toEqual([
-      ['mine', 'user draft'],
-      ['accepted', 'accepted'],
-      ['suggested', 'suggested'],
+    const list = JSON.parse((await call('list_drafts', { pr })).text) as { id: string; by: string }[];
+    expect(list.map((d) => [d.id, d.by])).toEqual([
+      ['mine', 'user'],
+      ['claude', 'Claude'],
     ]);
   });
 });

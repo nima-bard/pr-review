@@ -17,8 +17,7 @@ import { FilesView } from './FilesView';
 import { Overview } from './Overview';
 import { AgentPanel } from './AgentPanel';
 import { askAgent, useAgentFor } from '../../state/agents';
-import { useAgentSession } from '../../state/sessions';
-import { isSubmittable } from '../../../shared/drafts';
+import { loadAgentSession, useAgentSession } from '../../state/sessions';
 
 /** GitHub's state pill, plus the review decision when it says more than "review required". */
 function StateBadge({ pr }: { pr: PrPreview }) {
@@ -84,7 +83,7 @@ function MergeButton({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
-/** The agent's one button: a menu with Review with {agent} (into suggestions) and its conversation (the Agent panel). */
+/** The agent's one button: a menu with Review with {agent} (its comments go into your review) and its conversation. */
 function AgentButton({ snapshot }: { snapshot: PrSnapshot }) {
   const key = snapshot.key;
   const agent = useAgentFor(key);
@@ -100,7 +99,7 @@ function AgentButton({ snapshot }: { snapshot: PrSnapshot }) {
   return (
     <Button
       aria-haspopup="menu"
-      title={`${agent.name}: review this pull request into suggestions (nothing goes to GitHub until you submit), or show the conversation (⇧⌘A)`}
+      title={`${agent.name}: review this pull request, its comments go into your review (nothing goes to GitHub until you submit), or show the conversation (⇧⌘A)`}
       onClick={() => void open()}
       className={ui.showAgent ? 'bg-chip-on' : ''}
     >
@@ -137,8 +136,7 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
   const ui = usePrUi(key);
   const d = pr.details;
   const since = snapshot ? sinceLastReview(snapshot) : null;
-  const drafts = snapshot?.drafts.filter(isSubmittable).length ?? 0;
-  const suggestions = (snapshot?.drafts.length ?? 0) - drafts;
+  const drafts = snapshot?.drafts.length ?? 0;
   const count = (n: number | undefined) => (n === undefined ? <Pending /> : <span className="px-1.5 rounded-full bg-chip text-[11px]">{n}</span>);
   const views: { value: PrViewKind; label: React.ReactNode }[] = [
     { value: 'overview', label: 'Overview' },
@@ -189,11 +187,6 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
       <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
         Submit review
         {drafts > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{drafts} draft{drafts === 1 ? '' : 's'}</span>}
-        {suggestions > 0 && (
-          <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]" title="Comments an agent suggested, waiting for you to accept them">
-            {suggestions} suggested
-          </span>
-        )}
       </Button>
     </div>
   );
@@ -310,6 +303,11 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   const progress = useSessions((s) => s.progress[prKey]);
   const error = useSessions((s) => s.errors[prKey]);
   const ui = usePrUi(prKey);
+  const loaded = snapshot !== undefined;
+  // The PR's agent conversation, for the markers on asked lines and the Claude button, without opening the Agent panel.
+  useEffect(() => {
+    if (loaded) void loadAgentSession(prKey).catch(() => undefined);
+  }, [prKey, loaded]);
 
   const pr = snapshot ?? preview;
   if (!pr) {

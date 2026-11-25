@@ -1,5 +1,5 @@
 import { shellQuote } from '../../shared/quickActions';
-import { requestLabel } from '../../shared/agents';
+import { requestLabel, sessionTitle } from '../../shared/agents';
 import { finished, type Connector, type TurnContext } from './connector';
 
 export interface TerminalDeps {
@@ -20,9 +20,11 @@ export function terminalCommand(ctx: TurnContext): string {
   // The connection outlives this turn: each pushed request carries its own turn id instead.
   const { 'X-PR-Review-Turn': _turn, ...headers } = ctx.mcp.headers;
   const config = { mcpServers: { 'pr-review': { type: 'http', url: ctx.mcp.url, headers: { ...headers, 'X-PR-Review-Channel': '1' } } } };
+  const title = sessionTitle(ctx.env.PR_NUMBER, ctx.env.PR_TITLE);
   const args = [
     'claude',
     ...(ctx.resume ? ['--resume', ctx.sessionId!] : ['--session-id', ctx.sessionId!]),
+    ...(title ? ['--name', title] : []),
     '--mcp-config',
     JSON.stringify(config),
     '--dangerously-load-development-channels',

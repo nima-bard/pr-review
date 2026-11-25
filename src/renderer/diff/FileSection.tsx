@@ -86,7 +86,7 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
   );
   const drafts = useMemo(() => snapshot.drafts.filter((d) => d.path === file.path), [snapshot.drafts, file.path]);
   const turns = useAgentSession(key)?.turns;
-  const asks = useMemo(() => (turns ?? []).filter((t) => t.request.kind === 'lines' && t.request.target?.path === file.path && !ui.hiddenAsks[t.id]), [turns, file.path, ui.hiddenAsks]);
+  const asks = useMemo(() => (turns ?? []).filter((t) => t.request.kind === 'lines' && t.request.target?.path === file.path && !t.markerHidden), [turns, file.path]);
   const [selection, setSelection] = useState<SelectedLineRange | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Pierre keeps the "+" on the selected lines, so drop the selection once the comment editor closes (saved or discarded).

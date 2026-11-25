@@ -53,7 +53,7 @@ export class AgentRunner {
   private async newSession(connectorId?: string, turns: AgentTurn[] = []): Promise<AgentSession> {
     const { agents } = await this.deps.appState.settings();
     const connector = agents.find((a) => a.id === connectorId) ?? agents[0];
-    return { connectorId: connector?.id ?? '', sessionId: connector && SESSION_KINDS.includes(connector.kind) ? randomUUID() : null, started: false, continuedInDesktop: false, turns };
+    return { connectorId: connector?.id ?? '', sessionId: connector && SESSION_KINDS.includes(connector.kind) ? randomUUID() : null, started: false, turns };
   }
 
   private publish(key: string, pr: PrAgent, save = false): void {
@@ -123,7 +123,6 @@ export class AgentRunner {
           ...prepared,
           sessionId: session.sessionId,
           resume: session.started,
-          fork: session.started && session.continuedInDesktop,
           mcp: { url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}`, 'X-PR-Review-Pr': key, 'X-PR-Review-Turn': turn.id, 'X-PR-Review-Agent': connector.name } },
         },
         update,
@@ -142,8 +141,8 @@ export class AgentRunner {
     const { session } = pr;
     // The session exists once the agent reported it (even if the turn failed later) or the turn went through.
     if (session.sessionId && (sessionId || turn.status === 'done' || turn.status === 'handed-off')) {
-      // A fork wrote to a new session: the app's conversation continues there, and Claude Desktop keeps the old one.
-      if (sessionId && sessionId !== session.sessionId) Object.assign(session, { sessionId, continuedInDesktop: false });
+      // Claude Code may report another id (it continued in a copy): the PR's conversation goes on there.
+      if (sessionId && sessionId !== session.sessionId) session.sessionId = sessionId;
       session.started = true;
     }
     this.publish(key, pr, true);
@@ -197,10 +196,12 @@ export class AgentRunner {
     return session.sessionId;
   }
 
-  /** After the session opened in Claude Desktop: the app's next request starts a branch (--fork-session). */
-  async markContinuedInDesktop(key: string): Promise<void> {
+  /** Removes a line ask's marker from the diff, saved with the conversation so it stays away after a restart. */
+  async hideMarker(key: string, turnId: string): Promise<void> {
     const pr = await this.agent(key);
-    pr.session.continuedInDesktop = true;
+    const turn = pr.session.turns.find((t) => t.id === turnId);
+    if (!turn) return;
+    turn.markerHidden = true;
     this.publish(key, pr, true);
   }
 

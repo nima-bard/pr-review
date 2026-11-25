@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentPrompt, askPrefix, requestLabel } from '../../src/shared/agents';
+import { agentPrompt, askPrefix, requestLabel, sessionTitle } from '../../src/shared/agents';
 import type { AgentRequest, PrSnapshot } from '../../src/shared/model';
 
 const snap = { key: 'github.com/o/r#7', details: { url: 'https://github.com/o/r/pull/7' }, worktree: { path: '/wt/pr-7' } } as unknown as PrSnapshot;
@@ -36,6 +36,14 @@ describe('agentPrompt', () => {
     expect(p).toContain('add_draft (path "src/a.ts", line 5, start_line 3, side "RIGHT")');
   });
 
+  it('tells a line ask and a free request to answer questions without adding a review comment', () => {
+    for (const request of [lines, { kind: 'prompt', prompt: 'Is this safe?', target: null }] as AgentRequest[]) {
+      const p = agentPrompt(snap, request);
+      expect(p).toContain('A question, or a request to check, investigate or explain something: answer it in your reply only. Do not add a review comment');
+      expect(p).toContain('A request for a comment, or for a change to the code or its wording');
+    }
+  });
+
   it('never starts with "/", which Claude Desktop links disarm', () => {
     for (const request of [lines, { kind: 'review', prompt: '', target: null }, { kind: 'prompt', prompt: 'Summarise', target: null }] as AgentRequest[]) {
       expect(agentPrompt(snap, request).startsWith('/')).toBe(false);
@@ -46,5 +54,12 @@ describe('agentPrompt', () => {
     expect(requestLabel(lines)).toBe('src/a.ts:3–5');
     expect(requestLabel(lines, { fileName: true })).toBe('a.ts:3–5');
     expect(requestLabel({ kind: 'review', prompt: '', target: null })).toBe('Review the pull request');
+  });
+
+  it('names the PR session after the pull request, the same every time', () => {
+    expect(sessionTitle('3022', 'ci(pipelines): link builds')).toBe('PR #3022 · ci(pipelines): link builds');
+    expect(sessionTitle('7', '')).toBe('PR #7');
+    expect(sessionTitle(undefined, 'x')).toBeNull();
+    expect(sessionTitle('1', 'x'.repeat(200))).toHaveLength(80);
   });
 });

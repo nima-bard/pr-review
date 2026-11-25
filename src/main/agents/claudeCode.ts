@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { EMPTY_STREAM, parseClaudeLine } from '../../core/agents/claudeStream';
+import { sessionTitle } from '../../shared/agents';
 import { claudeBin, killGroup, type Connector } from './connector';
 
 /** What a review may use without asking: reading the code and the PR, and PR Review's draft tools. */
@@ -34,19 +35,21 @@ export const REVIEW_DENIED = ['Bash(gh api:*)', 'Bash(gh pr comment:*)', 'Bash(g
 const STDERR_LIMIT = 4000;
 
 /**
- * Claude Code, headless: one `claude -p` per turn in the PR's worktree, on the PR's session (`--session-id` the first
- * time, `--resume` after, `--fork-session` after a hand-over to Claude Desktop). No --bare: the review needs your
- * skills, hooks and CLAUDE.md. The prompt goes in on stdin; the answer streams back as stream-json.
+ * Claude Code, headless: one `claude -p` per turn in the PR's worktree, on the PR's one session (`--session-id` the
+ * first time, `--resume` after), named after the PR so Claude Desktop lists it as "PR #12 · Title". No --bare: the
+ * review needs your skills, hooks and CLAUDE.md. The prompt goes in on stdin; the answer streams back as stream-json.
  */
 export const claudeCode: Connector = {
   start(ctx, update) {
     const { connector } = ctx;
+    const title = sessionTitle(ctx.env.PR_NUMBER, ctx.env.PR_TITLE);
     const args = [
       '-p',
       '--output-format',
       'stream-json',
       '--verbose',
-      ...(ctx.resume ? ['--resume', ctx.sessionId!, ...(ctx.fork ? ['--fork-session'] : [])] : ['--session-id', ctx.sessionId!]),
+      ...(ctx.resume ? ['--resume', ctx.sessionId!] : ['--session-id', ctx.sessionId!]),
+      ...(title ? ['--name', title] : []),
       '--mcp-config',
       JSON.stringify({ mcpServers: { 'pr-review': { type: 'http', url: ctx.mcp.url, headers: ctx.mcp.headers } } }),
       '--permission-mode',

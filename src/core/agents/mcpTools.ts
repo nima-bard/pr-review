@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { isSuggestion } from '../../shared/drafts';
+import { isAgentDraft } from '../../shared/drafts';
 import type { Draft, PrSnapshot } from '../../shared/model';
 import type { ReviewBridge } from './reviewBridge';
 
@@ -29,8 +29,8 @@ const draftView = (d: Draft) => ({
   line: d.line,
   start_line: d.startLine ?? null,
   body: d.body,
+  // An agent's draft the user edited counts as the user's.
   by: d.origin ? d.origin.agent : 'user',
-  status: d.origin ? (d.origin.acceptedAt ? 'accepted' : 'suggested') : 'user draft',
   posted: d.postedThreadId !== undefined,
 });
 
@@ -81,11 +81,11 @@ export function ranges(lines: readonly number[]): string {
   return parts.length > 0 ? parts.join(', ') : 'none';
 }
 
-/** The draft `id` of PR `pr`, if an agent may change it: only suggestions nobody has accepted yet. */
+/** The draft `id` of PR `pr`, if an agent may change it: one an agent wrote and the user hasn't edited. */
 function agentDraft(bridge: ReviewBridge, pr: string, id: string): Draft {
   const draft = bridge.snapshot(pr).drafts.find((d) => d.id === id);
   if (!draft) throw new Error(`There is no draft ${id}. list_drafts shows the current ones.`);
-  if (!isSuggestion(draft)) throw new Error("That draft is the user's; it can't be changed by an agent.");
+  if (!isAgentDraft(draft)) throw new Error("That draft is the user's (they wrote or edited it); an agent can't change it.");
   return draft;
 }
 
@@ -132,7 +132,7 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
     'list_drafts',
     {
       title: 'List draft comments',
-      description: "The pending review's draft comments in PR Review: the user's own, and agent suggestions (accepted or not).",
+      description: "The pending review's draft comments in PR Review: the user's own, and the ones agents added (`by`).",
       inputSchema: { pr: PR },
       annotations: { readOnlyHint: true },
     },
@@ -144,7 +144,7 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
     {
       title: 'Add a draft review comment',
       description:
-        "Adds a comment to the user's pending review in PR Review as a suggestion. It is not posted: the user accepts, edits or dismisses it, and submits the review from the app. " +
+        "Adds a comment to the user's pending review in PR Review. It is not posted: the user reads it (and may edit or delete it) and submits the review from the app. " +
         'Lines are numbered in the PR head (side RIGHT) or the base (side LEFT), and must be in the diff (changed lines and their context).',
       inputSchema: {
         pr: PR,
@@ -172,7 +172,7 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
     'update_draft',
     {
       title: 'Change a draft comment',
-      description: 'Replaces the text of a suggestion an agent added that the user has not accepted yet.',
+      description: 'Replaces the text of a draft an agent added that the user has not edited.',
       inputSchema: { pr: PR, id: z.string(), body: z.string().min(1) },
     },
     async ({ pr, id, body }) =>
@@ -187,7 +187,7 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
     'delete_draft',
     {
       title: 'Delete a draft comment',
-      description: 'Deletes a suggestion an agent added that the user has not accepted yet.',
+      description: 'Deletes a draft an agent added that the user has not edited.',
       inputSchema: { pr: PR, id: z.string() },
       annotations: { destructiveHint: true },
     },

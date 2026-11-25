@@ -238,7 +238,7 @@ test('opens a PR into a worktree, re-anchors an outdated thread and submits a re
   expect(submit?.vars).toMatchObject({ reviewId: 'R1', event: 'COMMENT', body: 'Two small things.' });
 });
 
-test('an agent adds a draft over MCP: a suggestion until accepted, then submitted with the review', async () => {
+test('an agent adds a draft over MCP: it is in your review right away and goes out when you submit', async () => {
   const client = new Client({ name: 'e2e', version: '1' });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}`, 'X-PR-Review-Agent': 'Codex' } } }),
@@ -250,21 +250,19 @@ test('an agent adds a draft over MCP: a suggestion until accepted, then submitte
   expect(outside.content[0]?.text).toContain('Commentable lines');
   await client.close();
 
-  await expect(win.getByText('Suggested by Codex', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Draft · from Codex', { exact: true })).toBeVisible({ timeout: 20_000 });
   await win.getByRole('button', { name: /Submit review/ }).first().click();
   const dialog = win.getByRole('dialog', { name: 'Submit your review' });
-  await expect(dialog).toContainText('Not in this review: 1 suggestion from Codex');
-  await dialog.getByRole('button', { name: 'Accept all' }).click();
-  await expect(dialog).not.toContainText('Not in this review');
+  await expect(dialog).toContainText('Local draft · from Codex');
   const before = received.length;
   await dialog.getByRole('button', { name: /^Submit review/ }).click();
   await expect(dialog).toBeHidden({ timeout: 20_000 });
   const posted = received.slice(before).find((r) => r.query.includes('addPullRequestReviewThread('));
   expect(posted?.vars).toMatchObject({ path: 'src/calc.ts', line: 8, body: 'Read the rate from config.' });
-  await expect(win.getByText(/Suggested by Codex/)).toBeHidden();
+  await expect(win.getByText('Draft · from Codex', { exact: true })).toBeHidden();
 });
 
-test('asking Claude about a line: the line gets a marker, the answer is in the Agent panel, its comment a suggestion', async () => {
+test('asking Claude about a line: the line gets a marker, the answer is in the Agent panel, its comment a draft', async () => {
   await win.evaluate(() =>
     (globalThis as unknown as { api: Api }).api.askAgent('github.com/acme/demo#1', {
       kind: 'lines',
@@ -274,7 +272,7 @@ test('asking Claude about a line: the line gets a marker, the answer is in the A
   );
   await expect(win.getByText('Asked Claude:')).toBeVisible({ timeout: 20_000 });
   await expect(win.getByText('Answered', { exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(win.getByText('Suggested by Claude', { exact: true })).toBeVisible();
+  await expect(win.getByText('Draft · from Claude', { exact: true })).toBeVisible();
   // The answer isn't shown in the diff, only in the Agent panel.
   const answer = 'Yes, negative items would lower the total. I added a comment.';
   const panel = win.getByRole('complementary', { name: 'Agent' });
@@ -282,5 +280,13 @@ test('asking Claude about a line: the line gets a marker, the answer is in the A
   await expect(win.getByText(answer)).toHaveCount(0);
   await win.getByRole('button', { name: 'Show in Agent panel' }).click();
   await expect(panel.getByText(answer)).toBeVisible();
-  await expect(panel.getByText('1 comment added · 1 waiting for you to accept:')).toBeVisible();
+  await expect(panel.getByText('1 comment added to your review:')).toBeVisible();
+
+  // Removing the marker takes it off the line and is saved with the conversation, so a refresh doesn't bring it back.
+  // (With the file tree, conversations and Agent panel all open, this test window leaves the code too narrow to reach it.)
+  await panel.getByRole('button', { name: 'Close the Agent panel' }).click();
+  await win.getByRole('button', { name: 'Hide this marker' }).click();
+  await expect(win.getByText('Asked Claude:')).toHaveCount(0);
+  const saved = await win.evaluate(() => (globalThis as unknown as { api: Api }).api.agentSession('github.com/acme/demo#1'));
+  expect(saved?.turns.find((t) => t.request.kind === 'lines')?.markerHidden).toBe(true);
 });

@@ -35,7 +35,6 @@ import {
 } from '../shared/model';
 import { filterPaths, searchWorktree } from '../core/search/codeSearch';
 import { triage } from '../shared/triage';
-import { isSubmittable } from '../shared/drafts';
 import {
   changeReviewRequests,
   deleteHeadBranch,
@@ -780,10 +779,9 @@ export class PrSession {
     }
   }
 
-  /** Saves a draft from the app; saving an agent's suggestion (an edit) accepts it, since the text is yours now. */
+  /** Saves a draft from the app (yours: an agent's draft you edited comes without its origin). */
   async saveDraft(draft: Draft): Promise<void> {
-    const saved = draft.origin && draft.origin.acceptedAt === null ? { ...draft, origin: { ...draft.origin, acceptedAt: new Date().toISOString() } } : draft;
-    await this.deps.drafts.save(this.key, saved);
+    await this.deps.drafts.save(this.key, draft);
     await this.showDrafts();
   }
 
@@ -800,7 +798,7 @@ export class PrSession {
     });
   }
 
-  /** A draft an agent wrote (through the MCP server): a suggestion until you accept it, on the current head. */
+  /** A draft an agent wrote (through the MCP server), on the current head; it goes out with your review. */
   async addAgentDraft(input: { path: string; side: DiffSide; line: number; startLine: number | null; body: string }, origin: DraftOrigin): Promise<Draft> {
     const snap = this.loaded();
     const draft: Draft = {
@@ -813,14 +811,14 @@ export class PrSession {
       body: input.body,
       headOid: snap.details.headRefOid,
       createdAt: new Date().toISOString(),
-      origin: { ...origin, acceptedAt: null },
+      origin,
     };
     await this.deps.drafts.save(this.key, draft);
     await this.showDrafts();
     return draft;
   }
 
-  /** Changes the text of an agent's suggestion, keeping it a suggestion (an agent revising its own draft). */
+  /** Changes the text of an agent's draft (an agent revising its own comment; it keeps its origin). */
   async updateAgentDraft(id: string, body: string): Promise<Draft> {
     const draft = (await this.deps.drafts.list(this.key)).find((d) => d.id === id);
     if (!draft) throw new Error(`There is no draft ${id}.`);
@@ -828,14 +826,6 @@ export class PrSession {
     await this.deps.drafts.save(this.key, next);
     await this.showDrafts();
     return next;
-  }
-
-  /** Accepts agent suggestions, so Submit sends them. */
-  async acceptDrafts(ids: string[]): Promise<void> {
-    const at = new Date().toISOString();
-    const drafts = (await this.deps.drafts.list(this.key)).map((d) => (ids.includes(d.id) && d.origin && d.origin.acceptedAt === null ? { ...d, origin: { ...d.origin, acceptedAt: at } } : d));
-    await this.deps.drafts.saveAll(this.key, drafts);
-    await this.showDrafts();
   }
 
   async deleteDrafts(ids: string[]): Promise<void> {
@@ -899,7 +889,7 @@ export class PrSession {
   async submitReview(input: SubmitInput): Promise<void> {
     const snap = this.snapshot;
     if (!snap) throw new Error('PR not loaded');
-    if (snap.drafts.some((d) => d.unplaceable && isSubmittable(d))) {
+    if (snap.drafts.some((d) => d.unplaceable)) {
       throw new Error('Some draft comments sit on lines that changed in a newer push. Move or delete them before submitting.');
     }
     await reviews.submitReview({

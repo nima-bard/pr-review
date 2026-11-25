@@ -48,9 +48,7 @@ export interface Api {
   setViewed(key: string, paths: string[], viewed: boolean): Promise<void>;
   saveDraft(key: string, draft: Draft): Promise<void>;
   deleteDraft(key: string, draftId: string): Promise<void>;
-  /** Accepts agent suggestions, so Submit sends them. */
-  acceptDrafts(key: string, ids: string[]): Promise<void>;
-  /** Deletes several drafts (dismissing suggestions). */
+  /** Deletes several drafts. */
   deleteDrafts(key: string, ids: string[]): Promise<void>;
   reply(key: string, threadId: string, body: string): Promise<void>;
   setResolved(key: string, threadId: string, resolved: boolean): Promise<void>;
@@ -127,8 +125,10 @@ export interface Api {
   setAgentConnector(key: string, connectorId: string): Promise<void>;
   /** Shows the PR's Claude Code session in Claude Desktop (`claude --desktop --resume <id>`); later app requests fork. */
   openAgentInDesktop(key: string): Promise<void>;
-  /** Deletes the suggestions an agent turn added (ones you accepted stay). */
+  /** Deletes the drafts an agent turn added (ones you edited are yours and stay). */
   deleteTurnDrafts(key: string, turnId: string): Promise<void>;
+  /** Removes a line ask's marker from the diff for good; the request stays in the Agent panel. */
+  hideAskMarker(key: string, turnId: string): Promise<void>;
   /** The PR Review MCP server: whether it runs, its URL, and whether Claude Code has it registered. */
   mcpStatus(): Promise<McpStatus>;
   /** Registers the MCP server with Claude Code (user scope), after asking; Desktop's Code tab then sees it too. */
@@ -171,7 +171,6 @@ export const API_METHODS = [
   'setViewed',
   'saveDraft',
   'deleteDraft',
-  'acceptDrafts',
   'deleteDrafts',
   'reply',
   'setResolved',
@@ -226,6 +225,7 @@ export const API_METHODS = [
   'setAgentConnector',
   'openAgentInDesktop',
   'deleteTurnDrafts',
+  'hideAskMarker',
   'mcpStatus',
   'connectClaudeCode',
   'copyMcpClientConfig',

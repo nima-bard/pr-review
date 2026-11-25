@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AgentTurn, PrSnapshot } from '../../../shared/model';
 import { requestLabel } from '../../../shared/agents';
 import { api, errorText } from '../../api';
-import { Badge, Button, cx, ErrorBox, Icon, Select, Spinner } from '../../components/ui';
+import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Select, Spinner } from '../../components/ui';
 import { askAgent, useAgentFor, useAgents } from '../../state/agents';
 import { loadAgentSession, useAgentSession } from '../../state/sessions';
 import { focusFile, updateUi, usePrUi } from '../../state/ui';
@@ -20,14 +20,16 @@ const STATUS: Record<AgentTurn['status'], { label: string; tone: 'muted' | 'info
 /** "$0.04" for a turn's cost; under a cent shows as "<$0.01". */
 const cost = (usd: number) => (usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);
 
-/** One request and its answer: what was asked, what the agent did, its reply, and the suggestions it added. */
+/** One request and its answer: what was asked, what the agent did, its reply, and the comments it added. */
 export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: PrSnapshot; turn: AgentTurn; highlighted?: boolean }) {
   const key = snapshot.key;
   const [showActivity, setShowActivity] = useState(false);
   const live = turn.status === 'queued' || turn.status === 'running';
-  const suggestions = snapshot.drafts.filter((d) => turn.draftIds.includes(d.id));
-  const waiting = suggestions.filter((d) => d.origin?.acceptedAt === null);
+  const comments = snapshot.drafts.filter((d) => turn.draftIds.includes(d.id));
+  // Comments it added that you haven't edited (an edited one is yours, and "Delete them" leaves it).
+  const untouched = comments.filter((d) => d.origin !== undefined);
   const status = STATUS[turn.status];
+  const target = turn.request.kind === 'lines' ? turn.request.target : null;
   return (
     <div
       id={`turn-${turn.id}`}
@@ -38,6 +40,13 @@ export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: Pr
           {turn.agent} · {requestLabel(turn.request, { fileName: true })}
         </span>
         <span className="flex-1" />
+        {target && (
+          // To the asked lines: their marker if it's still shown, else the file.
+          <Button size="sm" title={`Go to ${requestLabel(turn.request)}`} onClick={() => focusFile(key, target.path, null, `ask-${turn.id}`)}>
+            <Icon name="external" size={12} />
+            Go to line
+          </Button>
+        )}
         {turn.status === 'running' ? <Spinner /> : null}
         <Badge tone={status.tone}>{status.label}</Badge>
         {live && (
@@ -71,24 +80,26 @@ export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: Pr
           ))}
         </ul>
       )}
-      {turn.reply && <div className="text-comment text-fg whitespace-pre-wrap break-words">{turn.reply}</div>}
+      {turn.reply && <MarkdownText text={turn.reply} className="text-comment text-fg break-words" />}
       {turn.error && <ErrorBox message={turn.error} />}
-      {(suggestions.length > 0 || turn.costUsd !== null) && (
+      {(comments.length > 0 || turn.costUsd !== null) && (
         <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-muted">
-          {suggestions.length > 0 && (
+          {comments.length > 0 && (
             <>
               <span>
-                {suggestions.length} comment{suggestions.length === 1 ? '' : 's'} added
-                {waiting.length > 0 ? ` · ${waiting.length} waiting for you to accept` : ''}:
+                {comments.length} comment{comments.length === 1 ? '' : 's'} added to your review:
               </span>
-              {suggestions.map((d) => (
-                <button key={d.id} type="button" onClick={() => focusFile(key, d.path)} className="font-mono text-link hover:underline cursor-pointer">
-                  {d.path.split('/').at(-1)}:{d.line}
-                </button>
+              {comments.map((d) => (
+                <Button key={d.id} size="sm" title={`Go to the comment on ${d.path}:${d.line}`} onClick={() => focusFile(key, d.path, null, `draft-${d.id}`)}>
+                  <Icon name="comment" size={12} />
+                  <span className="font-mono">
+                    {d.path.split('/').at(-1)}:{d.line}
+                  </span>
+                </Button>
               ))}
-              {waiting.length > 0 && (
+              {untouched.length > 0 && (
                 <button type="button" onClick={() => void api.deleteTurnDrafts(key, turn.id)} className="text-muted hover:text-del cursor-pointer">
-                  Dismiss them
+                  Delete {untouched.length === 1 ? 'it' : 'them'}
                 </button>
               )}
             </>
@@ -170,14 +181,11 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
         </div>
       ) : (
         <>
-          {session?.continuedInDesktop && (
-            <div className="px-3 py-2 text-[12px] text-soft bg-info-subtle border-b border-info-line">Continued in Claude Desktop. New requests from here start a branch of that conversation.</div>
-          )}
           <div ref={list} className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
             {turns.length === 0 && (
               <div className="text-[12.5px] text-muted leading-relaxed">
-                Every request about this pull request goes to the same {agent.name} session: reviews, questions on a line (“Ask” in a comment), and what you type below. Comments it writes arrive as suggestions on the
-                lines, for you to accept, edit or dismiss.
+                Every request about this pull request goes to the same {agent.name} session: reviews, questions on a line (“Ask” in a comment), and what you type below. Comments it writes go into your review on their
+                lines, as drafts you can edit or delete before you submit.
               </div>
             )}
             {turns.map((t) => (
@@ -205,7 +213,7 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
                 <Button
                   size="sm"
                   disabled={busy}
-                  title="Show this conversation in Claude Desktop and continue it there. Requests from the app then start a branch, so neither side loses messages."
+                  title={`This pull request's conversation in Claude Desktop, always the same session (named “PR #${snapshot.ref.number}”). Continue it there or here, one at a time.`}
                   onClick={() => run(() => api.openAgentInDesktop(key))}
                 >
                   Open in Claude Desktop

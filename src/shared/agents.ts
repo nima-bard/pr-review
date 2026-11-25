@@ -8,6 +8,16 @@ export const AGENT_PRESETS: Omit<AgentConnector, 'id'>[] = [
   { name: 'Gemini', kind: 'command', command: 'gemini -p "$PR_PROMPT"', model: '' },
 ];
 
+/**
+ * The name of a PR's Claude Code session, as Claude Desktop lists it: "PR #3022 · ci(pipelines): link Azure…". The
+ * same every time, so the PR has one recognisable session. Null without a number.
+ */
+export function sessionTitle(number: string | undefined, title: string | undefined): string | null {
+  if (!number) return null;
+  const name = `PR #${number}${title?.trim() ? ` · ${title.trim()}` : ''}`;
+  return name.length > 80 ? `${name.slice(0, 79)}…` : name;
+}
+
 /** Whether `kind` is one the app still has (saved settings may hold a removed one, like the old Desktop hand-off). */
 export const isConnectorKind = (kind: string): kind is AgentConnector['kind'] => Object.hasOwn(CONNECTOR_KINDS, kind);
 
@@ -49,12 +59,24 @@ export function requestLabel(request: AgentRequest, { fileName = false } = {}): 
 }
 
 /**
+ * What to do with a request about the code, said the same way every time: a question gets an answer and nothing else;
+ * only a request for a comment or a change becomes a review comment. `where` names the lines for add_draft.
+ */
+function answerOrComment(where: string | null): string {
+  return [
+    'How to respond: decide from the request above whether it asks a question or asks for a review comment.',
+    '- A question, or a request to check, investigate or explain something: answer it in your reply only. Do not add a review comment, even if you find a problem: describe it in the answer, and the user can ask for a comment.',
+    `- A request for a comment, or for a change to the code or its wording (rephrase, rename, fix, suggest…): add exactly one review comment with the pr-review tool add_draft${where ? ` (${where})` : ''}, and say in your reply what it says.`,
+  ].join('\n');
+}
+
+/**
  * The prompt an agent gets for `request`. Plain words, no leading "/" (which Claude Desktop links disarm), and the
- * same rule every time: comments go to PR Review as drafts, nothing to GitHub.
+ * same rules every time: review comments go to PR Review as drafts, nothing to GitHub, and a question is only answered.
  */
 export function agentPrompt(snapshot: PrSnapshot, request: AgentRequest, context: LineContext | null = null): string {
   const { key, details, worktree } = snapshot;
-  const rules = `Don't post anything to GitHub: add review comments as drafts with the pr-review tool add_draft (pr "${key}").`;
+  const rules = `Don't post anything to GitHub: review comments go to the user's review as drafts, with the pr-review tool add_draft (pr "${key}").`;
   if (request.kind === 'review') {
     return [
       `Review pull request ${details.url} with the code-review skill. You are working inside PR Review.`,
@@ -74,9 +96,10 @@ export function agentPrompt(snapshot: PrSnapshot, request: AgentRequest, context
       context?.code ?? '(lines unavailable)',
       '```',
       ...(threads.length > 0 ? ['Review comments already on these lines:', ...threads.map((c) => `- ${c.author}: ${c.body.replace(/\s+/g, ' ').trim()}`)] : []),
-      `If a review comment is warranted, add it with add_draft (path "${t.path}", line ${t.endLine}${t.startLine !== t.endLine ? `, start_line ${t.startLine}` : ''}, side "${t.side}"). Otherwise answer briefly why not.`,
+      '',
+      answerOrComment(`path "${t.path}", line ${t.endLine}${t.startLine !== t.endLine ? `, start_line ${t.startLine}` : ''}, side "${t.side}"`),
       rules,
     ].join('\n');
   }
-  return `${request.prompt.trim()}\n\nContext: pull request ${details.url} (PR Review key "${key}"), checked out at ${worktree.path}. ${rules}`;
+  return [`${request.prompt.trim()}`, '', `Context: pull request ${details.url} (PR Review key "${key}"), checked out at ${worktree.path}.`, '', answerOrComment(null), rules].join('\n');
 }

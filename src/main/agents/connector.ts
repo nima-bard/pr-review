@@ -14,15 +14,13 @@ export interface TurnContext {
   sessionId: string | null;
   /** The session exists: continue it (--resume) instead of starting it (--session-id). */
   resume: boolean;
-  /** Resume as a new branch (after the session was continued in Claude Desktop); the new id comes back in `result`. */
-  fork: boolean;
   /** The MCP server's URL and the headers that tie this turn's calls to it. */
   mcp: { url: string; headers: Record<string, string> };
 }
 
 export interface RunningTurn {
   stop(): void;
-  /** Resolves when the turn ends, with the session id it wrote to (a fork's new one), if the agent reports it. */
+  /** Resolves when the turn ends, with the session id it wrote to, if the agent reports it. */
   done: Promise<{ sessionId: string | null }>;
 }
 

@@ -162,7 +162,10 @@ export class SessionRegistry implements ChannelBridge {
     return this.agents.agentReply(this.bridgeSession(pr).key, turnId, text);
   }
 
-  /** Opens the PR's Claude Code session in Claude Desktop; the app's next request then starts a branch (--fork-session). */
+  /**
+   * Opens the PR's Claude Code session in Claude Desktop: always the same one (it is never branched), named after the
+   * PR, so Desktop shows one session per pull request. The app and Desktop take turns on it.
+   */
   private async openAgentInDesktop(key: string): Promise<void> {
     const cwd = this.session(key).current?.worktree.path;
     const id = await this.agents.desktopSession(key);
@@ -172,7 +175,6 @@ export class SessionRegistry implements ChannelBridge {
       const detail = (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
       throw new Error(`Could not open the session in Claude Desktop: ${detail}. It needs Claude Code 2.1.285 or later and a subscription sign-in.`);
     }
-    await this.agents.markContinuedInDesktop(key);
   }
 
   private async mcpStatus(): Promise<McpStatus> {
@@ -214,9 +216,9 @@ export class SessionRegistry implements ChannelBridge {
     return this.bridgeSession(pr).getFileDiff(path);
   }
 
-  async addDraft(pr: string, input: AgentDraftInput, origin: Omit<DraftOrigin, 'acceptedAt'>): Promise<Draft> {
+  async addDraft(pr: string, input: AgentDraftInput, origin: DraftOrigin): Promise<Draft> {
     const session = this.bridgeSession(pr);
-    const draft = await session.addAgentDraft(input, { ...origin, acceptedAt: null });
+    const draft = await session.addAgentDraft(input, origin);
     if (origin.turnId) await this.agents.draftAdded(session.key, origin.turnId, draft.id).catch(() => undefined);
     return draft;
   }
@@ -452,7 +454,6 @@ export class SessionRegistry implements ChannelBridge {
       setViewed: (key, paths, viewed) => this.session(key).setViewed(paths, viewed),
       saveDraft: (key, draft) => this.session(key).saveDraft(draft),
       deleteDraft: (key, id) => this.session(key).deleteDraft(id),
-      acceptDrafts: (key, ids) => this.session(key).acceptDrafts(ids),
       deleteDrafts: (key, ids) => this.session(key).deleteDrafts(ids),
       reply: (key, threadId, body) => this.session(key).reply(threadId, body),
       setResolved: (key, threadId, resolved) => this.session(key).setResolved(threadId, resolved),
@@ -550,9 +551,11 @@ export class SessionRegistry implements ChannelBridge {
       agentSession: (key) => this.agents.session(key),
       setAgentConnector: (key, connectorId) => this.agents.setConnector(key, connectorId),
       openAgentInDesktop: (key) => this.openAgentInDesktop(key),
+      hideAskMarker: (key, turnId) => this.agents.hideMarker(key, turnId),
       deleteTurnDrafts: async (key, turnId) => {
         const session = this.session(key);
-        const ids = (await session.listDrafts()).filter((d) => d.origin?.turnId === turnId && d.origin.acceptedAt === null).map((d) => d.id);
+        // Only the agent's own drafts: one you edited is yours and stays.
+        const ids = (await session.listDrafts()).filter((d) => d.origin?.turnId === turnId).map((d) => d.id);
         await session.deleteDrafts(ids);
       },
       mcpStatus: () => this.mcpStatus(),

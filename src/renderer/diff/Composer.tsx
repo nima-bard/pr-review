@@ -6,6 +6,7 @@ import { askPrefix } from '../../shared/agents';
 import { askAgent, useAgentFor } from '../state/agents';
 import { requestComposer, updateUi, usePrUi } from '../state/ui';
 import { readUnsent, unsentKey, writeUnsent, type ComposerTarget } from '../state/unsent';
+import { CommentBody } from './CommentBody';
 
 function newDraftId(): string {
   return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -96,8 +97,7 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
       headOid: snapshot.details.headRefOid,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       ...(target.startLine !== target.endLine ? { startLine: target.startLine } : {}),
-      // An agent's suggestion keeps who wrote it; saving your edit accepts it (main does that).
-      ...(existing?.origin ? { origin: existing.origin } : {}),
+      // No `origin`: once you edit an agent's draft, it's yours (and agents can't change it any more).
     };
     try {
       await api.saveDraft(snapshot.key, draft);
@@ -173,7 +173,7 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
         ) : (
           <div className="flex items-center gap-2">
             <span className="text-[11.5px] text-muted">
-              {asking ? `⌘⏎ sends it to ${agent.name}; a comment it writes arrives here as a suggestion` : `⌘⏎ or “${isDraftEdit ? 'Save draft' : 'Add review comment'}” puts it in your review`}
+              {asking ? `⌘⏎ sends it to ${agent.name}; a comment it writes goes into your review here` : `⌘⏎ or “${isDraftEdit ? 'Save draft' : 'Add review comment'}” puts it in your review`}
             </span>
             <span className="flex-1" />
             <Button size="sm" variant="ghost" onClick={finish}>
@@ -191,36 +191,24 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
 
 export function DraftCard({ snapshot, draft }: { snapshot: PrSnapshot; draft: Draft }) {
   const range = draft.startLine !== undefined ? `Lines ${draft.startLine}–${draft.line}` : `Line ${draft.line}`;
-  const suggested = draft.origin !== undefined && draft.origin.acceptedAt === null;
   const edit = () => requestComposer(snapshot.key, { path: draft.path, side: draft.side, startLine: draft.startLine ?? draft.line, endLine: draft.line, draftId: draft.id, body: draft.body });
   return (
-    <div className={cx('max-w-[680px] rounded-[9px] bg-raised border overflow-hidden font-sans text-comment', suggested ? 'border-warn-line' : 'border-info-line')}>
+    <div id={`draft-${draft.id}`} className="max-w-[680px] rounded-[9px] bg-raised border border-info-line overflow-hidden font-sans text-comment">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-line-2">
         <span className="font-semibold">{range}</span>
-        {suggested ? (
-          <span title="Not in your review until you accept it" className="inline-flex">
-            <Badge tone="warn">Suggested by {draft.origin!.agent}</Badge>
-          </span>
-        ) : (
-          <Badge tone="info">{draft.origin ? `Draft · from ${draft.origin.agent}` : 'Draft · not posted yet'}</Badge>
-        )}
+        <Badge tone="info">{draft.origin ? `Draft · from ${draft.origin.agent}` : 'Draft · not posted yet'}</Badge>
         {draft.unplaceable && <Badge tone="bad">Line changed in a new push · move or delete</Badge>}
         <span className="flex-1" />
-        {suggested && (
-          <Button size="sm" variant="primary" onClick={() => void api.acceptDrafts(snapshot.key, [draft.id])}>
-            Accept
-          </Button>
-        )}
-        <Button size="sm" onClick={edit} title={suggested ? 'Saving your edit accepts it' : undefined}>
+        <Button size="sm" onClick={edit} title={draft.origin ? `Once you edit it, it's your comment (${draft.origin.agent} can't change it any more)` : undefined}>
           Edit
         </Button>
         <Button size="sm" onClick={() => void api.deleteDraft(snapshot.key, draft.id)}>
-          {suggested ? 'Dismiss' : 'Delete'}
+          Delete
         </Button>
       </div>
       <div className="flex gap-2.5 px-3 py-2.5">
         {draft.origin ? <AgentAvatar name={draft.origin.agent} /> : <Avatar login={snapshot.viewer} size={26} />}
-        <div className="min-w-0 flex-1 whitespace-pre-wrap text-fg">{draft.body}</div>
+        <CommentBody snapshot={snapshot} draft={draft} />
       </div>
     </div>
   );

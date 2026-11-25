@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import { useEffect, useMemo, useRef, type ButtonHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { parsePrInput } from '../../shared/prInput';
 import { appTheme } from '../../shared/themes';
@@ -172,6 +173,15 @@ export function Markdown({ html, className }: { html: string; className?: string
       dangerouslySetInnerHTML={{ __html: clean }}
     />
   );
+}
+
+/**
+ * Markdown written in the app (drafts, agent replies), rendered like GitHub's comments: GitHub-flavoured, line breaks
+ * kept, and through `Markdown`, so it's sanitized and links behave the same.
+ */
+export function MarkdownText({ text, className }: { text: string; className?: string }) {
+  const html = useMemo(() => marked.parse(text, { gfm: true, breaks: true, async: false }), [text]);
+  return <Markdown html={html} className={className} />;
 }
 
 export function timeAgo(iso: string | null | undefined): string {
