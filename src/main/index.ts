@@ -256,7 +256,14 @@ void app.whenReady().then(async () => {
           items.map((item) =>
             item === 'separator'
               ? { type: 'separator' as const }
-              : { label: item.label, enabled: item.enabled ?? true, accelerator: item.accelerator, registerAccelerator: false, click: () => resolve(item.id) },
+              : {
+                  label: item.label,
+                  enabled: item.enabled ?? true,
+                  accelerator: item.accelerator,
+                  registerAccelerator: false,
+                  ...(item.checked !== undefined ? { type: 'checkbox' as const, checked: item.checked } : {}),
+                  click: () => resolve(item.id),
+                },
           ),
         );
         // On macOS the close callback can run before the item's click handler, so give the click a moment to win.

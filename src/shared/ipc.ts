@@ -147,8 +147,11 @@ export interface Api {
   takePendingLinks(): Promise<string[]>;
 }
 
-/** `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). */
-export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string } | 'separator';
+/**
+ * `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). `checked`: the item shows a check
+ * mark when true (a setting that is on, or the chosen one of a group); leave it out for plain actions.
+ */
+export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string; checked?: boolean } | 'separator';
 
 export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'toggle-agent' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 

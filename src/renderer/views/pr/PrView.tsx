@@ -8,7 +8,8 @@ import { MergeDialog } from '../../dialogs/MergeDialog';
 import { SubmitReviewDialog } from '../../dialogs/SubmitReviewDialog';
 import { showChanges, VersionsDialog } from '../../dialogs/VersionsDialog';
 import { setSessionError, useSessions } from '../../state/sessions';
-import { updateUi, usePrUi, type PrViewKind } from '../../state/ui';
+import { getPrUi, setPrefs, updateUi, usePrefs, usePrUi, type PrViewKind } from '../../state/ui';
+import { agentMenuItems, viewMenuItems } from './viewMenus';
 import { CommitsView } from './CommitsView';
 import { RunsDialog, RunsIndicator } from './ActionRuns';
 import { showActionsMenu } from '../../state/quickActions';
@@ -83,27 +84,50 @@ function MergeButton({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
-/** Review with {agent}: runs the code review into suggestions; the Agent panel opens beside it. */
-function AgentButtons({ snapshot }: { snapshot: PrSnapshot }) {
+/** The agent's one button: a menu with Review with {agent} (into suggestions) and its conversation (the Agent panel). */
+function AgentButton({ snapshot }: { snapshot: PrSnapshot }) {
   const key = snapshot.key;
   const agent = useAgentFor(key);
   const ui = usePrUi(key);
   const session = useAgentSession(key);
   if (!agent) return null;
   const working = session?.turns.some((t) => t.status === 'running' || t.status === 'queued') ?? false;
+  const open = async () => {
+    const choice = await api.contextMenu(agentMenuItems(agent.name, ui.showAgent));
+    if (choice === 'review') await askAgent(key, { kind: 'review', prompt: '', target: null });
+    else if (choice === 'panel') updateUi(key, { showAgent: !getPrUi(key).showAgent });
+  };
   return (
-    <>
-      <Button
-        title={`Ask ${agent.name} to review this pull request with your code-review skill. Its comments arrive as suggestions; nothing goes to GitHub until you submit.`}
-        onClick={() => void askAgent(key, { kind: 'review', prompt: '', target: null })}
-      >
-        Review with {agent.name}
-      </Button>
-      <Button aria-pressed={ui.showAgent} title="The conversation with the agent (⇧⌘A)" onClick={() => updateUi(key, { showAgent: !ui.showAgent })} className={ui.showAgent ? 'bg-chip-on' : ''}>
-        {working ? <span className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" aria-hidden="true" /> : <Icon name="comment" />}
-        Agent
-      </Button>
-    </>
+    <Button
+      aria-haspopup="menu"
+      title={`${agent.name}: review this pull request into suggestions (nothing goes to GitHub until you submit), or show the conversation (⇧⌘A)`}
+      onClick={() => void open()}
+      className={ui.showAgent ? 'bg-chip-on' : ''}
+    >
+      {working ? <span className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" aria-hidden="true" /> : <Icon name="comment" />}
+      {agent.name}
+      <Icon name="chevron" size={12} />
+    </Button>
+  );
+}
+
+/** The Files view's ⚙ menu: layout, word wrap and the side panels, like github.com's diff settings. */
+function ViewMenuButton({ snapshot }: { snapshot: PrSnapshot }) {
+  const key = snapshot.key;
+  const open = async () => {
+    const ui = getPrUi(key);
+    const { wordWrap } = usePrefs.getState();
+    const openThreads = snapshot.threads.filter((t) => !t.isResolved).length;
+    const choice = await api.contextMenu(viewMenuItems({ layout: ui.layout, wordWrap, showTree: ui.showTree, showPanel: ui.showPanel, openThreads }));
+    if (choice === 'layout:split' || choice === 'layout:unified') updateUi(key, { layout: choice === 'layout:split' ? 'split' : 'unified' });
+    else if (choice === 'wrap') setPrefs({ wordWrap: !wordWrap });
+    else if (choice === 'tree') updateUi(key, { showTree: !ui.showTree });
+    else if (choice === 'conversations') updateUi(key, { showPanel: !ui.showPanel });
+  };
+  return (
+    <Button aria-label="View options" aria-haspopup="menu" title="View options: layout, word wrap, file tree and conversations" onClick={() => void open()} className="px-2">
+      <Octicon name="gear" size={14} />
+    </Button>
   );
 }
 
@@ -150,20 +174,7 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
               {since.action}
             </Button>
           )}
-          <Segmented
-            label="Diff layout"
-            value={ui.layout}
-            onChange={(v) => updateUi(key, { layout: v })}
-            options={[
-              { value: 'split', label: 'Split' },
-              { value: 'unified', label: 'Unified' },
-            ]}
-          />
-          <Button aria-pressed={ui.showPanel} onClick={() => updateUi(key, { showPanel: !ui.showPanel })} className={ui.showPanel ? 'bg-chip-on' : ''}>
-            <Icon name="comment" />
-            Conversations
-            <span className="px-1.5 rounded-full bg-chip text-[11px] font-semibold">{snapshot.threads.filter((t) => !t.isResolved).length}</span>
-          </Button>
+          <ViewMenuButton snapshot={snapshot} />
         </>
       )}
       {/* The pull request's own actions are on the Overview; ⌥⌘1–9 run quick actions from anywhere. */}
@@ -174,7 +185,7 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
         </Button>
       )}
       {snapshot && view === 'overview' && d.state === 'OPEN' && (d.isDraft ? d.viewerCan.update : d.viewerCan.merge) && <MergeButton snapshot={snapshot} />}
-      {snapshot && <AgentButtons snapshot={snapshot} />}
+      {snapshot && <AgentButton snapshot={snapshot} />}
       <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
         Submit review
         {drafts > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{drafts} draft{drafts === 1 ? '' : 's'}</span>}
