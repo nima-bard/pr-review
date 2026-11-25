@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { RepoMapping, Settings, Version } from '../../shared/model';
+import type { AgentSession, RepoMapping, Settings, Version } from '../../shared/model';
 import { readJson, writeJson } from './jsonStore';
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -23,6 +23,8 @@ export const DEFAULT_SETTINGS: Settings = {
   codeFont: 'JetBrains Mono',
   quickActions: [],
   terminalApp: '',
+  mcpPort: 47823,
+  agents: [],
 };
 
 export interface ManualPlacement {
@@ -146,6 +148,20 @@ export class AppState {
 
   async saveViewedBlobs(prKey: string, blobs: Record<string, string>): Promise<void> {
     await writeJson(this.viewedFile(prKey), blobs);
+  }
+
+  private agentFile(prKey: string): string {
+    return join(this.dir, 'agents', `${safeName(prKey)}.json`);
+  }
+
+  /** The PR's agent conversation (see `AgentSession`), or null before its first request. */
+  async agentSession(prKey: string): Promise<AgentSession | null> {
+    return readJson<AgentSession | null>(this.agentFile(prKey), null);
+  }
+
+  /** Keeps the last 200 turns. */
+  async saveAgentSession(prKey: string, session: AgentSession): Promise<void> {
+    await writeJson(this.agentFile(prKey), { ...session, turns: session.turns.slice(-200) });
   }
 
   draftsFile(prKey: string): string {

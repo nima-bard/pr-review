@@ -4,6 +4,9 @@ import { api, errorText } from '../api';
 import { Badge, Button, cx, ErrorBox, Icon } from '../components/ui';
 import { discardUnsent, unsentComments } from '../diff/Composer';
 import { focusFile, loadSummary, requestComposer, saveSummary, updateUi } from '../state/ui';
+import { isSubmittable, suggestionGroups } from '../../shared/drafts';
+import { requestLabel } from '../../shared/agents';
+import { useAgentSession } from '../state/sessions';
 
 const VERDICTS: { id: ReviewEvent; title: string; desc: string; tone: string }[] = [
   { id: 'COMMENT', title: 'Comment', desc: 'General feedback, no explicit approval.', tone: 'text-strong' },
@@ -21,8 +24,13 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
   const own = snapshot.role === 'author';
   const verdicts = own ? VERDICTS.filter((v) => v.id === 'COMMENT') : VERDICTS;
   const pendingFromWeb = snapshot.pendingReview?.commentCount ?? 0;
-  const empty = snapshot.drafts.length === 0 && pendingFromWeb === 0 && summary.trim() === '' && event === 'COMMENT';
-  const blocked = snapshot.drafts.some((d) => d.unplaceable);
+  // Agent suggestions you haven't accepted aren't part of the review: they're listed apart, and stay after submitting.
+  const drafts = snapshot.drafts.filter(isSubmittable);
+  const groups = suggestionGroups(snapshot.drafts);
+  const suggestions = groups.reduce((n, g) => n + g.drafts.length, 0);
+  const turns = useAgentSession(key)?.turns;
+  const empty = drafts.length === 0 && pendingFromWeb === 0 && summary.trim() === '' && event === 'COMMENT';
+  const blocked = drafts.some((d) => d.unplaceable);
   // Typed but never added: not part of the review, so say so before it goes out without them.
   const [unsent, setUnsent] = useState(() => unsentComments(key, snapshot.drafts));
 
@@ -105,17 +113,17 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
           )}
           <section aria-labelledby="drafts-h" className="flex flex-col gap-2">
             <h3 id="drafts-h" className="text-[13px] font-semibold text-strong">
-              Comments in this review <span className="text-muted font-normal">{snapshot.drafts.length + pendingFromWeb}</span>
+              Comments in this review <span className="text-muted font-normal">{drafts.length + pendingFromWeb}</span>
             </h3>
-            {snapshot.drafts.length === 0 && <div className="text-muted text-[12.5px]">No draft comments. Hover a diff line and click "+" to add one.</div>}
-            {snapshot.drafts.map((d) => (
+            {drafts.length === 0 && <div className="text-muted text-[12.5px]">No draft comments. Hover a diff line and click "+" to add one.</div>}
+            {drafts.map((d) => (
               <div key={d.id} className="flex gap-2.5 items-start px-3 py-2.5 rounded-[9px] bg-panel border border-line-2">
                 <span className="flex-1 min-w-0 flex flex-col gap-1">
                   <span className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-[11.5px] text-soft">
                       {d.path} · {d.startLine !== undefined ? `L${d.startLine}–${d.line}` : `L${d.line}`}
                     </span>
-                    {d.postedThreadId ? <Badge tone="ok">Posted, awaiting submit</Badge> : <Badge tone="info">Local draft</Badge>}
+                    {d.postedThreadId ? <Badge tone="ok">Posted, awaiting submit</Badge> : <Badge tone="info">{d.origin ? `Local draft · from ${d.origin.agent}` : 'Local draft'}</Badge>}
                     {d.unplaceable && <Badge tone="bad">Line changed in a new push · move or delete</Badge>}
                   </span>
                   <span className="text-fg whitespace-pre-wrap line-clamp-4">{d.body}</span>
@@ -135,6 +143,61 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
               </div>
             ))}
           </section>
+          {suggestions > 0 && (
+            <section aria-labelledby="suggestions-h" className="flex flex-col gap-2 px-3 py-2.5 rounded-[9px] bg-warn-bg border border-warn-line">
+              <span className="flex items-center gap-2">
+                <h3 id="suggestions-h" className="flex-1 text-[13px] font-semibold text-warn">
+                  Not in this review: {suggestions} suggestion{suggestions === 1 ? '' : 's'} from {[...new Set(groups.map((g) => g.agent))].join(', ')}
+                </h3>
+                <Button size="sm" variant="primary" onClick={() => void api.acceptDrafts(key, groups.flatMap((g) => g.drafts.map((d) => d.id)))}>
+                  Accept all
+                </Button>
+              </span>
+              <span className="text-[12px] text-soft">An agent wrote {suggestions === 1 ? 'this' : 'these'}. Accept {suggestions === 1 ? 'it' : 'the ones you agree with'} to send them with your review; the rest stay here for later.</span>
+              {groups.map((g) => {
+                const turn = turns?.find((t) => t.id === g.turnId);
+                return (
+                  <div key={`${g.agent}:${g.turnId ?? ''}`} className="flex flex-col gap-1.5">
+                    <span className="flex items-center gap-2 text-[12px] text-soft">
+                      <span className="flex-1 truncate">
+                        {g.agent}
+                        {turn ? ` · ${requestLabel(turn.request)}` : ''} · {g.drafts.length}
+                      </span>
+                      <Button size="sm" variant="ghost" onClick={() => void api.deleteDrafts(key, g.drafts.map((d) => d.id))}>
+                        Delete these
+                      </Button>
+                    </span>
+                    {g.drafts.map((d) => (
+                      <div key={d.id} className="flex gap-2.5 items-start px-3 py-2 rounded-[8px] bg-panel border border-line-2">
+                        <span className="flex-1 min-w-0 flex flex-col gap-1">
+                          <span className="font-mono text-[11.5px] text-soft">
+                            {d.path} · {d.startLine !== undefined ? `L${d.startLine}–${d.line}` : `L${d.line}`}
+                          </span>
+                          <span className="text-fg whitespace-pre-wrap line-clamp-4">{d.body}</span>
+                        </span>
+                        <Button size="sm" onClick={() => void api.acceptDrafts(key, [d.id])}>
+                          Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            close();
+                            focusFile(key, d.path);
+                          }}
+                        >
+                          Show
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => void api.deleteDraft(key, d.id)}>
+                          Dismiss
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </section>
+          )}
           <section className="flex flex-col gap-1.5">
             <label htmlFor="summary" className="text-[13px] font-semibold text-strong">
               Summary
@@ -171,7 +234,7 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
           <span className="flex-1 text-[12px] text-muted">Drafts are saved locally and only go to GitHub when you submit.</span>
           <Button onClick={close}>Keep drafting</Button>
           <Button variant="primary" disabled={busy || empty || blocked} title={blocked ? 'Move or delete drafts on changed lines first' : undefined} onClick={() => void submit()}>
-            {busy ? 'Submitting…' : 'Submit review'}
+            {busy ? 'Submitting…' : drafts.length > 0 ? `Submit review (${drafts.length})` : 'Submit review'}
           </Button>
         </div>
       </div>

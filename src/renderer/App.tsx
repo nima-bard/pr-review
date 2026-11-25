@@ -4,6 +4,7 @@ import { TabBar } from './components/TabBar';
 import { refreshInbox } from './state/inbox';
 import { checkSoon, startSessionEvents, useSessions } from './state/sessions';
 import { loadQuickActions, prActions, runQuickAction } from './state/quickActions';
+import { loadAgents } from './state/agents';
 import { loadAppSettings } from './state/settings';
 import { activateIndex, closeTab, newTab, openPr, openPrLink, openSettings, popOutKey, restoreTabs, useTabs } from './state/tabs';
 import { getPrUi, openFind, setPrefs, showSearch, stepFind, updateUi, usePrefs } from './state/ui';
@@ -45,6 +46,7 @@ export function App() {
     window.addEventListener('focus', onFocus);
     const restored = restoreTabs();
     void loadQuickActions();
+    void loadAgents();
     void refreshInbox();
     const inboxTimer = setInterval(() => void refreshInbox(true, true), 3 * 60_000);
     const stopUpdates = popOutKey ? () => undefined : startUpdateChecks();
@@ -72,6 +74,7 @@ export function App() {
         if (action === 'find') openFind(tab.key, selectedCode());
         if (action === 'find-next') stepFind(tab.key, 1);
         if (action === 'find-previous') stepFind(tab.key, -1);
+        if (action === 'toggle-agent') updateUi(tab.key, { showAgent: !getPrUi(tab.key).showAgent });
         if (action === 'show-files') updateUi(tab.key, { view: 'files', showTree: true, sidebar: 'files' });
       }
     });

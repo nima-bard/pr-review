@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
 import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -211,6 +211,7 @@ function buildMenu(): void {
         submenu: [
           { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+B', click: send('toggle-tree') },
           { label: 'Toggle Conversations', accelerator: 'CmdOrCtrl+Shift+C', click: send('toggle-conversations') },
+          { label: 'Toggle Agent Panel', accelerator: 'CmdOrCtrl+Shift+A', click: send('toggle-agent') },
           { label: 'Toggle Word Wrap', accelerator: 'Alt+Z', click: send('toggle-word-wrap') },
           { type: 'separator' },
           { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: send('find-in-files') },
@@ -268,6 +269,12 @@ void app.whenReady().then(async () => {
       const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
       return response === 0;
     },
+    copyText: (text) => clipboard.writeText(text),
+    // Only "new session" links: nothing else of Claude Desktop's can be reached from the app.
+    openClaudeLink: async (url) => {
+      if (!url.startsWith('claude://code/new?')) throw new Error('Only links that start a new Claude Desktop session can be opened.');
+      await shell.openExternal(url);
+    },
     notify: (title, body, url) => {
       // In the app, the status bar shows it.
       if (BrowserWindow.getFocusedWindow() || !Notification.isSupported()) return;
@@ -278,6 +285,8 @@ void app.whenReady().then(async () => {
   });
   applyAppTheme((await registry.appState.settings()).appTheme);
   registerIpc(registry.api());
+  // Without the server (no Keychain access…) the app still works; Settings › Agents shows that it isn't running.
+  await registry.startMcp().catch(() => undefined);
   app.setAboutPanelOptions({ applicationName: 'PR Review', applicationVersion: currentVersion() });
   buildMenu();
   createWindow();
@@ -293,5 +302,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   registry?.stopActions();
+  registry?.stopMcp();
   registry?.disposeAll();
 });

@@ -76,6 +76,16 @@ describe('submitReview', () => {
     expect(posted).toEqual(['comment b', 'comment c']);
   });
 
+  it('posts your drafts and accepted suggestions only, and keeps the suggestions you have not accepted', async () => {
+    const drafts = new DraftStore((k) => join(dir, `${k}.json`));
+    const suggested = draft('s', { origin: { agent: 'Claude', turnId: 't1', acceptedAt: null } });
+    await drafts.saveAll('pr3', [draft('own'), draft('acc', { origin: { agent: 'Claude', turnId: 't1', acceptedAt: '2026-01-02T00:00:00Z' } }), suggested]);
+    const { client, calls } = fakeClient();
+    await submitReview({ client, drafts, prKey: 'pr3', pullRequestId: 'PR_3', headOid: 'h1', pendingReviewId: 'R', event: 'COMMENT', body: '', spacingMs: 0 });
+    expect(calls.filter((c) => c.query.includes('addPullRequestReviewThread(')).map((c) => c.vars.body)).toEqual(['comment own', 'comment acc']);
+    expect(await drafts.list('pr3')).toEqual([suggested]);
+  });
+
   it('file comments use subjectType FILE without a line', () => {
     expect(threadInput('R', draft('f', { subject: 'file' }))).toEqual({ reviewId: 'R', path: 'src/a.ts', body: 'comment f', subjectType: 'FILE' });
   });

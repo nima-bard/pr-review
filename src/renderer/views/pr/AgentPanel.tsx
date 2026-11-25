@@ -1,0 +1,202 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { AgentTurn, PrSnapshot } from '../../../shared/model';
+import { requestLabel } from '../../../shared/agents';
+import { api, errorText } from '../../api';
+import { Badge, Button, cx, ErrorBox, Icon, Select, Spinner } from '../../components/ui';
+import { askAgent, useAgentFor, useAgents } from '../../state/agents';
+import { loadAgentSession, useAgentSession } from '../../state/sessions';
+import { focusFile, updateUi } from '../../state/ui';
+import { openSettings } from '../../state/tabs';
+
+const STATUS: Record<AgentTurn['status'], { label: string; tone: 'muted' | 'info' | 'warn' | 'ok' | 'bad' }> = {
+  queued: { label: 'Waiting', tone: 'muted' },
+  running: { label: 'Working…', tone: 'info' },
+  done: { label: 'Done', tone: 'ok' },
+  failed: { label: 'Failed', tone: 'bad' },
+  stopped: { label: 'Stopped', tone: 'muted' },
+  'handed-off': { label: 'Sent', tone: 'info' },
+};
+
+/** "$0.04" for a turn's cost; under a cent shows as "<$0.01". */
+const cost = (usd: number) => (usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);
+
+/** One request and its answer: what was asked, what the agent did, its reply, and the suggestions it added. */
+export function TurnCard({ snapshot, turn, compact = false }: { snapshot: PrSnapshot; turn: AgentTurn; compact?: boolean }) {
+  const key = snapshot.key;
+  const [showActivity, setShowActivity] = useState(false);
+  const live = turn.status === 'queued' || turn.status === 'running';
+  const suggestions = snapshot.drafts.filter((d) => turn.draftIds.includes(d.id));
+  const waiting = suggestions.filter((d) => d.origin?.acceptedAt === null);
+  const status = STATUS[turn.status];
+  return (
+    <div className="flex flex-col gap-1.5 px-3 py-2.5 rounded-[9px] bg-raised border border-line-2 font-sans">
+      <span className="flex items-center gap-2 min-w-0">
+        <span className="text-[12px] font-semibold text-strong truncate">
+          {turn.agent} · {requestLabel(turn.request)}
+        </span>
+        <span className="flex-1" />
+        {turn.status === 'running' ? <Spinner /> : null}
+        <Badge tone={status.tone}>{status.label}</Badge>
+        {live && (
+          <Button size="sm" variant="ghost" onClick={() => void api.stopAgentTurn(key, turn.id)}>
+            {turn.status === 'queued' ? 'Cancel' : 'Stop'}
+          </Button>
+        )}
+      </span>
+      {turn.request.prompt.trim() && !compact && <span className="text-[12.5px] text-soft whitespace-pre-wrap line-clamp-4">{turn.request.prompt}</span>}
+      {turn.activity.length > 0 && (
+        <button type="button" onClick={() => setShowActivity(!showActivity)} className="flex items-center gap-1 w-fit text-[11.5px] text-muted hover:text-fg cursor-pointer">
+          <Icon name="chevron" size={10} rotate={showActivity ? 0 : -90} />
+          {showActivity ? 'Hide' : 'Show'} what it did ({turn.activity.length}){!showActivity && live ? ` · ${turn.activity.at(-1)}` : ''}
+        </button>
+      )}
+      {showActivity && (
+        <ul className="flex flex-col gap-0.5 pl-4 text-[11.5px] text-muted font-mono">
+          {turn.activity.map((a, i) => (
+            <li key={i} className="truncate" title={a}>
+              {a}
+            </li>
+          ))}
+        </ul>
+      )}
+      {turn.reply && <div className="text-comment text-fg whitespace-pre-wrap break-words">{turn.reply}</div>}
+      {turn.error && <ErrorBox message={turn.error} />}
+      {(suggestions.length > 0 || turn.costUsd !== null) && (
+        <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-muted">
+          {suggestions.length > 0 && (
+            <>
+              <span>
+                {suggestions.length} comment{suggestions.length === 1 ? '' : 's'} added
+                {waiting.length > 0 ? ` · ${waiting.length} waiting for you to accept` : ''}:
+              </span>
+              {suggestions.map((d) => (
+                <button key={d.id} type="button" onClick={() => focusFile(key, d.path)} className="font-mono text-link hover:underline cursor-pointer">
+                  {d.path.split('/').at(-1)}:{d.line}
+                </button>
+              ))}
+              {waiting.length > 0 && (
+                <button type="button" onClick={() => void api.deleteTurnDrafts(key, turn.id)} className="text-muted hover:text-del cursor-pointer">
+                  Dismiss them
+                </button>
+              )}
+            </>
+          )}
+          <span className="flex-1" />
+          {turn.costUsd !== null && <span title="What this request cost, as Claude Code reports it">{cost(turn.costUsd)}</span>}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The PR's agent conversation (⇧⌘A): every request sent from the app and its answer, and a box for new requests. */
+export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
+  const key = snapshot.key;
+  const agents = useAgents((s) => s.agents);
+  const agent = useAgentFor(key);
+  const session = useAgentSession(key);
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const turns = session?.turns ?? [];
+  const last = turns.at(-1);
+  useEffect(() => {
+    void loadAgentSession(key).catch(() => undefined);
+  }, [key]);
+  // Follow the conversation as it grows, like a chat.
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns.length, last?.reply, last?.activity.length]);
+
+  const send = async () => {
+    if (!text.trim()) return;
+    await askAgent(key, { kind: 'prompt', prompt: text, target: null }, false);
+    setText('');
+  };
+  const run = (action: () => Promise<void>) => {
+    setError(null);
+    action().catch((err: unknown) => setError(errorText(err)));
+  };
+  const busy = turns.some((t) => t.status === 'running');
+
+  return (
+    <aside aria-label="Agent" className="w-[420px] flex-none flex flex-col bg-side border-l border-line min-h-0">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-line">
+        <h2 className="text-[13px] font-semibold text-strong">Agent</h2>
+        {agents.length > 1 && agent ? (
+          <Select surface="raised" aria-label="Agent for this pull request" value={agent.id} disabled={busy} onChange={(e) => run(() => api.setAgentConnector(key, e.target.value))} className="flex-1 min-w-0 [&_select]:h-7">
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <span className="flex-1 text-[12px] text-muted truncate">{agent?.name}</span>
+        )}
+        <button type="button" aria-label="Close the Agent panel" onClick={() => updateUi(key, { showAgent: false })} className="grid place-items-center w-[26px] h-[26px] rounded-md text-muted hover:text-fg cursor-pointer">
+          <Icon name="close" size={13} />
+        </button>
+      </div>
+      {!agent ? (
+        <div className="p-4 flex flex-col gap-3 text-[12.5px] text-fg">
+          <span>No agent is set up. Set up Claude (or another agent) in Settings, then ask it about this pull request here.</span>
+          <Button className="w-fit" onClick={() => openSettings('agents')}>
+            Open Settings › Agents
+          </Button>
+        </div>
+      ) : (
+        <>
+          {session?.continuedInDesktop && (
+            <div className="px-3 py-2 text-[12px] text-soft bg-info-subtle border-b border-info-line">Continued in Claude Desktop. New requests from here start a branch of that conversation.</div>
+          )}
+          <div ref={list} className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
+            {turns.length === 0 && (
+              <div className="text-[12.5px] text-muted leading-relaxed">
+                Every request about this pull request goes to the same {agent.name} session: reviews, questions on a line (“Ask” in a comment), and what you type below. Comments it writes arrive as suggestions on the
+                lines, for you to accept, edit or dismiss.
+              </div>
+            )}
+            {turns.map((t) => (
+              <TurnCard key={t.id} snapshot={snapshot} turn={t} />
+            ))}
+          </div>
+          {error && (
+            <div className="px-3 pb-2">
+              <ErrorBox message={error} />
+            </div>
+          )}
+          <div className="p-3 border-t border-line flex flex-col gap-2">
+            <textarea
+              rows={3}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send();
+              }}
+              placeholder={`Ask ${agent.name} about this pull request…`}
+              className="resize-y px-2.5 py-2 rounded-[7px] bg-card border border-line-2 focus:border-accent outline-none text-[13px]"
+            />
+            <span className="flex items-center gap-2">
+              {agent.kind === 'claude-code' && session?.started && (
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  title="Show this conversation in Claude Desktop and continue it there. Requests from the app then start a branch, so neither side loses messages."
+                  onClick={() => run(() => api.openAgentInDesktop(key))}
+                >
+                  Open in Claude Desktop
+                </Button>
+              )}
+              <span className={cx('flex-1 text-[11.5px] text-muted', turns.some((t) => t.status === 'queued') ? '' : 'invisible')}>Requests run one at a time.</span>
+              <Button size="sm" variant="primary" disabled={!text.trim()} onClick={() => void send()}>
+                Send
+              </Button>
+            </span>
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}

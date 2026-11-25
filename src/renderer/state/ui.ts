@@ -35,6 +35,10 @@ export interface PrUi {
   showMerge: boolean;
   /** The output of background quick actions. */
   showRuns: boolean;
+  /** The Agent panel: the PR's conversation with its agent (⇧⌘A). */
+  showAgent: boolean;
+  /** Answers to line asks hidden from the diff (they stay in the Agent panel). */
+  hiddenAsks: Record<string, true>;
   showVersions: boolean;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
@@ -75,6 +79,8 @@ const DEFAULT_UI: PrUi = {
   showSubmit: false,
   showMerge: false,
   showRuns: false,
+  showAgent: false,
+  hiddenAsks: {},
   pendingCompare: null,
   sidebar: 'files',
   search: { pattern: '', matchCase: false, wholeWord: false, regex: false, include: '', exclude: '', scope: 'changed' },

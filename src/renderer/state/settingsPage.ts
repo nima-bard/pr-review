@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type SettingsSection = 'general' | 'appearance' | 'github' | 'quick-actions' | 'comments' | 'about';
+export type SettingsSection = 'general' | 'appearance' | 'github' | 'quick-actions' | 'agents' | 'comments' | 'about';
 
 /**
  * The Settings page shown, kept while the app runs (Settings opens where you left it), and how its last change saved

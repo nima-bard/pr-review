@@ -1,6 +1,8 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -125,6 +127,36 @@ function mockGitHub(fx: Fixture, received: { query: string; vars: Record<string,
   });
 }
 
+/**
+ * A stand-in for the claude CLI: it reads the request on stdin, adds a draft through the PR Review MCP server named in
+ * --mcp-config where the prompt says add_draft goes, and prints stream-json like `claude -p --verbose` does.
+ */
+const FAKE_CLAUDE = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const at = (flag) => args[args.indexOf(flag) + 1];
+const server = JSON.parse(at('--mcp-config')).mcpServers['pr-review'];
+const sid = args.includes('--session-id') ? at('--session-id') : at('--resume');
+let prompt = '';
+process.stdin.on('data', (c) => (prompt += c));
+process.stdin.on('end', async () => {
+  const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+  out({ type: 'system', subtype: 'init', session_id: sid });
+  const where = /add_draft \\(path "([^"]+)", line (\\d+)/.exec(prompt);
+  const input = { pr: /pr "([^"]+)"/.exec(prompt)[1], path: where[1], line: Number(where[2]), body: 'Negative items lower the total: clamp them.' };
+  out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__pr-review__add_draft', input }] } });
+  const headers = { ...server.headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+  const call = (id, method, params) => fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) }).then((r) => r.text());
+  await call(0, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-claude', version: '1' } });
+  const result = await call(1, 'tools/call', { name: 'add_draft', arguments: input });
+  out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: result }] }] } });
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: 'Yes, negative items would lower the total. I added a comment.' }] } });
+  out({ type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: sid, total_cost_usd: 0.01 });
+});
+`;
+
+const MCP_TOKEN = 'e2e-mcp-token';
+let mcpPort = 0;
+
 let fx: Fixture;
 let server: Server;
 let app: ElectronApplication;
@@ -138,13 +170,23 @@ test.beforeAll(async () => {
   const port = (server.address() as AddressInfo).port;
   const userData = join(fx.root, 'userdata');
   mkdirSync(join(userData, 'pr-review'), { recursive: true });
+  mcpPort = 48_000 + Math.floor(Math.random() * 1000);
+  const agents = [{ id: 'claude', name: 'Claude', kind: 'claude-code', command: '', model: '' }];
   writeFileSync(
     join(userData, 'pr-review', 'state.json'),
-    JSON.stringify({ settings: { scanRoots: [join(fx.root, 'source')], worktreeRoot: null, editorCommand: 'true', placeThreshold: 0.7, guessThreshold: 0.5, aiEnabled: false, aiModel: 'haiku' }, repos: [], openTabs: [], ownedWorktrees: [] }),
+    JSON.stringify({
+      settings: { scanRoots: [join(fx.root, 'source')], worktreeRoot: null, editorCommand: 'true', placeThreshold: 0.7, guessThreshold: 0.5, aiEnabled: false, aiModel: 'haiku', mcpPort, agents },
+      repos: [],
+      openTabs: [],
+      ownedWorktrees: [],
+    }),
   );
+  const fakeClaude = join(fx.root, 'fake-claude.mjs');
+  writeFileSync(fakeClaude, FAKE_CLAUDE);
+  chmodSync(fakeClaude, 0o755);
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, PR_REVIEW_USER_DATA: userData, PR_REVIEW_API: `http://127.0.0.1:${port}`, PR_REVIEW_TOKEN: 'test-token' },
+    env: { ...process.env, PR_REVIEW_USER_DATA: userData, PR_REVIEW_API: `http://127.0.0.1:${port}`, PR_REVIEW_TOKEN: 'test-token', PR_REVIEW_MCP_TOKEN: MCP_TOKEN, PR_REVIEW_CLAUDE: fakeClaude },
   });
   win = await app.firstWindow();
 });
@@ -194,4 +236,44 @@ test('opens a PR into a worktree, re-anchors an outdated thread and submits a re
   expect(thread?.vars).toMatchObject({ reviewId: 'R1', path: 'src/calc.ts', line: 8, side: 'RIGHT', body: 'Discount should come from config.' });
   const submit = received.find((r) => r.query.includes('submitPullRequestReview('));
   expect(submit?.vars).toMatchObject({ reviewId: 'R1', event: 'COMMENT', body: 'Two small things.' });
+});
+
+test('an agent adds a draft over MCP: a suggestion until accepted, then submitted with the review', async () => {
+  const client = new Client({ name: 'e2e', version: '1' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}`, 'X-PR-Review-Agent': 'Codex' } } }),
+  );
+  const res = (await client.callTool({ name: 'add_draft', arguments: { pr: 'acme/demo#1', path: 'src/calc.ts', line: 8, body: 'Read the rate from config.' } })) as { isError?: boolean };
+  expect(res.isError).toBeFalsy();
+  const outside = (await client.callTool({ name: 'add_draft', arguments: { pr: 'acme/demo#1', path: 'src/calc.ts', line: 40, body: 'x' } })) as { isError?: boolean; content: { text: string }[] };
+  expect(outside.isError).toBe(true);
+  expect(outside.content[0]?.text).toContain('Commentable lines');
+  await client.close();
+
+  await expect(win.getByText('Suggested by Codex · not in your review until you accept it')).toBeVisible({ timeout: 20_000 });
+  await win.getByRole('button', { name: /Submit review/ }).first().click();
+  const dialog = win.getByRole('dialog', { name: 'Submit your review' });
+  await expect(dialog).toContainText('Not in this review: 1 suggestion from Codex');
+  await dialog.getByRole('button', { name: 'Accept all' }).click();
+  await expect(dialog).not.toContainText('Not in this review');
+  const before = received.length;
+  await dialog.getByRole('button', { name: /^Submit review/ }).click();
+  await expect(dialog).toBeHidden({ timeout: 20_000 });
+  const posted = received.slice(before).find((r) => r.query.includes('addPullRequestReviewThread('));
+  expect(posted?.vars).toMatchObject({ path: 'src/calc.ts', line: 8, body: 'Read the rate from config.' });
+  await expect(win.getByText(/Suggested by Codex/)).toBeHidden();
+});
+
+test('asking Claude about a line: the answer shows on the line, and its comment arrives as a suggestion', async () => {
+  await win.evaluate(() =>
+    (globalThis as unknown as { api: Api }).api.askAgent('github.com/acme/demo#1', {
+      kind: 'lines',
+      prompt: 'Can a negative item break this?',
+      target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 6, endLine: 6 },
+    }),
+  );
+  await expect(win.getByText('You asked Claude:')).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Yes, negative items would lower the total. I added a comment.')).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Suggested by Claude · not in your review until you accept it')).toBeVisible();
+  await expect(win.getByText('1 comment added · 1 waiting for you to accept:')).toBeVisible();
 });

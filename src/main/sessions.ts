@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pollDeviceToken, startDeviceFlow } from '../core/github/deviceFlow';
 import { TokenStore } from './tokenStore';
 import type { Api, InvokeMethods, ContextMenuItem } from '../shared/ipc';
-import { prKey, repoSlug, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type StaleWorktree, type WorktreeInfo } from '../shared/model';
+import { prKey, repoSlug, type AgentConnector, type AgentRequest, type Draft, type DraftOrigin, type FileDiffModel, type McpStatus, type PrSnapshot, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type StaleWorktree, type WorktreeInfo } from '../shared/model';
 import { parsePrInput } from '../shared/prInput';
 import { GhTokenProvider } from '../core/github/auth';
 import { endpointsFor, GitHubClient } from '../core/github/client';
@@ -20,6 +20,17 @@ import { checkForUpdate } from './updates';
 import { PrSession, type SessionEvent } from './session';
 import { ActionRunner, installedTerminals, openInTerminal } from './quickActions';
 import { actionEnv } from '../shared/quickActions';
+import type { AgentDraftInput, ReviewBridge } from '../core/agents/reviewBridge';
+import { findTool } from '../core/env';
+import { startMcpServer, type ChannelBridge, type RunningMcpServer } from './mcpServer';
+import { McpTokenStore } from './mcpToken';
+import { agentPrompt, type LineContext } from '../shared/agents';
+import { AgentRunner } from './agents/agentRunner';
+import { claudeCode } from './agents/claudeCode';
+import { claudeDesktop } from './agents/claudeDesktop';
+import { claudeTerminal } from './agents/claudeTerminal';
+import { commandConnector } from './agents/command';
+import { claudeBin, type Connector } from './agents/connector';
 
 export interface RegistryHost {
   userDataDir: string;
@@ -42,11 +53,22 @@ export interface RegistryHost {
   confirm(message: string, detail: string, button: string): Promise<boolean>;
   /** A system notification while the app isn't in front; clicking it shows the pull request `url`. */
   notify(title: string, body: string, url: string): void;
+  /** Puts text on the clipboard (for secrets the page mustn't see). */
+  copyText(text: string): void;
+  /** Opens a Claude Desktop link; only `claude://code/new?…` links are accepted. */
+  openClaudeLink(url: string): Promise<void>;
 }
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-export class SessionRegistry {
+/** Runs the claude CLI; resolves with its output, or rejects with what it printed. */
+function claude(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) =>
+    execFile(claudeBin(), args, { timeout: 30_000 }, (err, out, stderr) => (err ? reject(new Error(stderr.trim() || err.message)) : resolve(out))),
+  );
+}
+
+export class SessionRegistry implements ChannelBridge {
   readonly appState: AppState;
   private readonly drafts: DraftStore;
   private readonly sessions = new Map<string, PrSession>();
@@ -56,6 +78,11 @@ export class SessionRegistry {
   private scanned = false;
 
   private readonly tokens: TokenStore;
+  private readonly mcpTokens: McpTokenStore;
+  private mcp: RunningMcpServer | null = null;
+
+  /** Each PR's agent conversation (Settings › Agents). */
+  private readonly agents: AgentRunner;
 
   /** Background quick actions. When one ends: a notification, and a sync, since it may have changed the PR on GitHub. */
   private readonly actions = new ActionRunner(
@@ -72,11 +99,147 @@ export class SessionRegistry {
     this.appState = new AppState(host.userDataDir);
     this.drafts = new DraftStore((key) => this.appState.draftsFile(key));
     this.tokens = new TokenStore(host.userDataDir);
+    this.mcpTokens = new McpTokenStore(host.userDataDir);
+    this.agents = new AgentRunner({
+      appState: this.appState,
+      emit: (key, session) => this.host.emit({ type: 'agent', key, session }),
+      connector: (kind) => this.connector(kind),
+      prepare: async (key, request) => {
+        const session = this.session(key);
+        const snap = session.current;
+        if (!snap) throw new Error('The pull request is still loading.');
+        const context = request.kind === 'lines' && request.target ? await this.lineContext(session, request.target) : null;
+        return { worktree: snap.worktree.path, env: actionEnv(snap), prompt: agentPrompt(snap, request, context) };
+      },
+      mcp: async () => ({ url: await this.mcpUrl(), token: await this.mcpTokens.get() }),
+    });
   }
 
-  /** Stops the background quick actions (the app is quitting). */
+  /** Starts the PR Review MCP server (again, after the port or token changed). */
+  async startMcp(): Promise<void> {
+    this.mcp?.close();
+    const { mcpPort } = await this.appState.settings();
+    this.mcp = startMcpServer(this, mcpPort, await this.mcpTokens.get());
+  }
+
+  stopMcp(): void {
+    this.mcp?.close();
+    this.mcp = null;
+  }
+
+  private async mcpUrl(): Promise<string> {
+    return this.mcp?.url ?? `http://127.0.0.1:${(await this.appState.settings()).mcpPort}/mcp`;
+  }
+
+  private connector(kind: AgentConnector['kind']): Connector {
+    switch (kind) {
+      case 'claude-code':
+        return claudeCode;
+      case 'claude-desktop':
+        return claudeDesktop((url) => this.host.openClaudeLink(url));
+      case 'claude-terminal':
+        return claudeTerminal({
+          openTerminal: async (cwd, env, command, name) => openInTerminal((await this.appState.settings()).terminalApp, cwd, env, command, name),
+          channelConnected: (key) => this.mcp?.channelConnected(key) ?? false,
+          push: async (key, turnId, content, meta) => {
+            if (!this.mcp) throw new Error('The MCP server is not running. Check Settings › Agents.');
+            await this.mcp.push(key, turnId, content, meta);
+          },
+        });
+      case 'command':
+        return commandConnector;
+    }
+  }
+
+  /** What a line ask carries: the asked lines (from the head, or the base for old lines) and the threads on them. */
+  private async lineContext(session: PrSession, target: NonNullable<AgentRequest['target']>): Promise<LineContext> {
+    const file = await session.readFile(target.side === 'LEFT' ? 'base' : 'head', target.path);
+    const code = file.missing || file.binary ? null : file.contents.split('\n').slice(target.startLine - 1, target.endLine).join('\n');
+    const threads = (session.current?.threads ?? []).filter((t) => {
+      const start = t.anchor.line;
+      const end = t.anchor.endLine ?? start;
+      return t.path === target.path && t.side === target.side && start !== undefined && end !== undefined && start <= target.endLine && end >= target.startLine;
+    });
+    return { code, threads: threads.flatMap((t) => t.comments.map((c) => ({ author: c.author, body: c.body }))) };
+  }
+
+  agentReply(pr: string, turnId: string, text: string): Promise<void> {
+    return this.agents.agentReply(this.bridgeSession(pr).key, turnId, text);
+  }
+
+  /** Opens the PR's Claude Code session in Claude Desktop; the app's next request then starts a branch (--fork-session). */
+  private async openAgentInDesktop(key: string): Promise<void> {
+    const cwd = this.session(key).current?.worktree.path;
+    const id = await this.agents.desktopSession(key);
+    await new Promise<void>((resolve, reject) =>
+      execFile(claudeBin(), ['--desktop', '--resume', id], { cwd, timeout: 30_000 }, (err, _out, stderr) =>
+        err ? reject(new Error(`Could not open the session in Claude Desktop: ${stderr.trim() || err.message}. Claude Desktop needs Claude Code 2.1.285 or later and a subscription sign-in.`)) : resolve(),
+      ),
+    );
+    await this.agents.markContinuedInDesktop(key);
+  }
+
+  private async mcpStatus(): Promise<McpStatus> {
+    const { mcpPort } = await this.appState.settings();
+    const installed = process.env.PR_REVIEW_CLAUDE !== undefined || (await findTool('claude')) !== null;
+    const registered = installed && (await claude(['mcp', 'get', 'pr-review']).then(() => true, () => false));
+    const error = this.mcp ? this.mcp.error() : 'The MCP server is not running.';
+    return { running: this.mcp !== null && error === null, url: this.mcp?.url ?? `http://127.0.0.1:${mcpPort}/mcp`, error, claudeInstalled: installed, claudeCodeRegistered: registered };
+  }
+
+  /** Registers the MCP server with Claude Code for every project (user scope), replacing an older registration. */
+  private async connectClaudeCode(): Promise<void> {
+    if (!process.env.PR_REVIEW_CLAUDE && !(await findTool('claude'))) throw new Error('Claude Code is not installed. Install it from https://code.claude.com, then try again.');
+    const url = await this.mcpUrl();
+    const ok = await this.host.confirm(
+      'Connect Claude Code to PR Review?',
+      `Adds the MCP server "pr-review" (${url}) to your Claude Code settings for all projects. Claude Code and Claude Desktop's Code tab can then read the pull requests open here and add draft comments. Nothing is posted to GitHub without you.`,
+      'Connect',
+    );
+    if (!ok) return;
+    await claude(['mcp', 'remove', '-s', 'user', 'pr-review']).catch(() => undefined);
+    await claude(['mcp', 'add', '--transport', 'http', '-s', 'user', 'pr-review', url, '-H', `Authorization: Bearer ${await this.mcpTokens.get()}`]);
+  }
+
+  /** The PR for an MCP tool's `pr` argument (a key, URL or owner/repo#n), loaded. */
+  private bridgeSession(pr: string): PrSession {
+    const ref = parsePrInput(pr);
+    const session = ref ? this.sessions.get(prKey(ref)) : undefined;
+    if (!session?.current) throw new Error(`Open ${pr} in PR Review first (list_open_prs shows the open pull requests).`);
+    return session;
+  }
+
+  openPrs(): { key: string; url: string; title: string; worktree: string }[] {
+    return [...this.sessions.values()].flatMap((s) => (s.current ? [{ key: s.key, url: s.current.details.url, title: s.current.details.title, worktree: s.current.worktree.path }] : []));
+  }
+
+  snapshot(pr: string): PrSnapshot {
+    return this.bridgeSession(pr).current!;
+  }
+
+  fileDiff(pr: string, path: string): Promise<FileDiffModel | null> {
+    return this.bridgeSession(pr).getFileDiff(path);
+  }
+
+  async addDraft(pr: string, input: AgentDraftInput, origin: Omit<DraftOrigin, 'acceptedAt'>): Promise<Draft> {
+    const session = this.bridgeSession(pr);
+    const draft = await session.addAgentDraft(input, { ...origin, acceptedAt: null });
+    if (origin.turnId) await this.agents.draftAdded(session.key, origin.turnId, draft.id).catch(() => undefined);
+    return draft;
+  }
+
+  updateDraft(pr: string, id: string, body: string): Promise<Draft> {
+    return this.bridgeSession(pr).updateAgentDraft(id, body);
+  }
+
+  deleteDraft(pr: string, id: string): Promise<void> {
+    return this.bridgeSession(pr).deleteDraft(id);
+  }
+
+  /** Stops the background quick actions and agent requests (the app is quitting). */
   stopActions(): void {
     this.actions.stopAll();
+    this.agents.stopAll();
   }
 
   private resetAuth(host: string): void {
@@ -296,6 +459,8 @@ export class SessionRegistry {
       setViewed: (key, paths, viewed) => this.session(key).setViewed(paths, viewed),
       saveDraft: (key, draft) => this.session(key).saveDraft(draft),
       deleteDraft: (key, id) => this.session(key).deleteDraft(id),
+      acceptDrafts: (key, ids) => this.session(key).acceptDrafts(ids),
+      deleteDrafts: (key, ids) => this.session(key).deleteDrafts(ids),
       reply: (key, threadId, body) => this.session(key).reply(threadId, body),
       setResolved: (key, threadId, resolved) => this.session(key).setResolved(threadId, resolved),
       react: (key, subjectId, content, add) => this.session(key).react(subjectId, content, add),
@@ -356,8 +521,10 @@ export class SessionRegistry {
       },
       getSettings: () => this.appState.settings(),
       saveSettings: async (settings) => {
+        const { mcpPort } = await this.appState.settings();
         await this.appState.saveSettings(settings);
         this.host.applyAppTheme(settings.appTheme);
+        if (settings.mcpPort !== mcpPort) await this.startMcp();
       },
       openInEditor: async (key, path, line) => {
         const s = this.session(key);
@@ -382,6 +549,29 @@ export class SessionRegistry {
         this.host.popOut(key);
       },
       contextMenu: (items) => this.host.contextMenu(items),
+      askAgent: async (key, request) => {
+        this.session(key);
+        await this.agents.ask(key, request);
+      },
+      stopAgentTurn: (key, turnId) => this.agents.stop(key, turnId),
+      agentSession: (key) => this.agents.session(key),
+      setAgentConnector: (key, connectorId) => this.agents.setConnector(key, connectorId),
+      openAgentInDesktop: (key) => this.openAgentInDesktop(key),
+      deleteTurnDrafts: async (key, turnId) => {
+        const session = this.session(key);
+        const ids = (await session.listDrafts()).filter((d) => d.origin?.turnId === turnId && d.origin.acceptedAt === null).map((d) => d.id);
+        await session.deleteDrafts(ids);
+      },
+      mcpStatus: () => this.mcpStatus(),
+      connectClaudeCode: () => this.connectClaudeCode(),
+      copyMcpClientConfig: async () => {
+        const server = { type: 'http', url: await this.mcpUrl(), headers: { Authorization: `Bearer ${await this.mcpTokens.get()}` } };
+        this.host.copyText(JSON.stringify({ mcpServers: { 'pr-review': server } }, null, 2));
+      },
+      resetMcpToken: async () => {
+        await this.mcpTokens.reset();
+        await this.startMcp();
+      },
       authStatus: async () => {
         const host = 'github.com';
         const via = (await this.ghWorks(host)) ? 'gh' : (await this.tokens.get(host)) ? 'device' : 'none';

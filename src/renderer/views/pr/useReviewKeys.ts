@@ -56,6 +56,7 @@ export const SHORTCUTS: [string, string][] = [
   ['⇧⌘E', 'Show the file tree'],
   ['⌘B', 'Toggle file tree'],
   ['⇧⌘C', 'Toggle conversations'],
+  ['⇧⌘A', 'Toggle the Agent panel'],
   ['⌥Z', 'Toggle word wrap'],
   ['⌘R', 'Refresh pull request'],
   ['⌥⌘1–9', 'Run a quick action'],

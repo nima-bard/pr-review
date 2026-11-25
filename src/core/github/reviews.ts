@@ -1,3 +1,4 @@
+import { isSubmittable } from '../../shared/drafts';
 import type { Draft, EditableKind, ReviewEvent } from '../../shared/model';
 import type { DraftStore } from '../store/drafts';
 import type { GitHubClient } from './client';
@@ -44,7 +45,10 @@ export interface SubmitArgs {
   spacingMs?: number;
 }
 
-/** Adopts the viewer's pending review (or creates one), posts every unposted draft, then submits. Resumable. */
+/**
+ * Adopts the viewer's pending review (or creates one), posts every unposted draft you wrote or accepted, then submits.
+ * Resumable. Agent suggestions you haven't accepted stay, so you can still accept or dismiss them.
+ */
 export async function submitReview(args: SubmitArgs): Promise<void> {
   const { client, drafts } = args;
   let reviewId = args.pendingReviewId;
@@ -52,7 +56,7 @@ export async function submitReview(args: SubmitArgs): Promise<void> {
     const created = await client.graphql<AddReviewResponse>(ADD_REVIEW, { prId: args.pullRequestId, commitOID: args.headOid });
     reviewId = created.addPullRequestReview.pullRequestReview.id;
   }
-  for (const d of await drafts.list(args.prKey)) {
+  for (const d of (await drafts.list(args.prKey)).filter(isSubmittable)) {
     if (d.postedThreadId) continue;
     const res = await client.graphql<AddThreadResponse>(ADD_REVIEW_THREAD, threadInput(reviewId, d));
     const threadId = res.addPullRequestReviewThread.thread?.id;
@@ -61,7 +65,10 @@ export async function submitReview(args: SubmitArgs): Promise<void> {
     await sleep(args.spacingMs ?? 1000);
   }
   await client.graphql(SUBMIT_REVIEW, { reviewId, event: args.event, body: args.body });
-  await drafts.clear(args.prKey);
+  await drafts.saveAll(
+    args.prKey,
+    (await drafts.list(args.prKey)).filter((d) => !isSubmittable(d)),
+  );
 }
 
 export async function reply(client: GitHubClient, threadId: string, body: string): Promise<'SUBMITTED' | 'PENDING'> {

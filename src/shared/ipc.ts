@@ -1,5 +1,7 @@
 import type {
   ActionRun,
+  AgentRequest,
+  AgentSession,
   AuthStatus,
   BrowserExtensionInfo,
   CodeSearchQuery,
@@ -10,6 +12,7 @@ import type {
   FileContent,
   FileDiffModel,
   InboxSection,
+  McpStatus,
   MergeInfo,
   MergeInput,
   OpenPrResult,
@@ -45,6 +48,10 @@ export interface Api {
   setViewed(key: string, paths: string[], viewed: boolean): Promise<void>;
   saveDraft(key: string, draft: Draft): Promise<void>;
   deleteDraft(key: string, draftId: string): Promise<void>;
+  /** Accepts agent suggestions, so Submit sends them. */
+  acceptDrafts(key: string, ids: string[]): Promise<void>;
+  /** Deletes several drafts (dismissing suggestions). */
+  deleteDrafts(key: string, ids: string[]): Promise<void>;
   reply(key: string, threadId: string, body: string): Promise<void>;
   setResolved(key: string, threadId: string, resolved: boolean): Promise<void>;
   react(key: string, subjectId: string, content: ReactionContent, add: boolean): Promise<void>;
@@ -111,6 +118,25 @@ export interface Api {
   openExtensionsPage(page: string): Promise<boolean>;
   /** Shows the Chrome extension's folder in Finder. */
   revealBrowserExtension(): Promise<void>;
+  /** Sends a request to the PR's agent session (queued behind a running one). */
+  askAgent(key: string, request: AgentRequest): Promise<void>;
+  stopAgentTurn(key: string, turnId: string): Promise<void>;
+  /** The PR's agent conversation, for a window opened while it runs; null before the first request. */
+  agentSession(key: string): Promise<AgentSession | null>;
+  /** Switches the PR to another connector; the next request starts a new session. */
+  setAgentConnector(key: string, connectorId: string): Promise<void>;
+  /** Shows the PR's Claude Code session in Claude Desktop (`claude --desktop --resume <id>`); later app requests fork. */
+  openAgentInDesktop(key: string): Promise<void>;
+  /** Deletes the suggestions an agent turn added (ones you accepted stay). */
+  deleteTurnDrafts(key: string, turnId: string): Promise<void>;
+  /** The PR Review MCP server: whether it runs, its URL, and whether Claude Code has it registered. */
+  mcpStatus(): Promise<McpStatus>;
+  /** Registers the MCP server with Claude Code (user scope), after asking; Desktop's Code tab then sees it too. */
+  connectClaudeCode(): Promise<void>;
+  /** Copies the MCP settings for another client (URL and token, as JSON) to the clipboard; the token never reaches a page. */
+  copyMcpClientConfig(): Promise<void>;
+  /** A new token; clients registered with the old one must be connected again. */
+  resetMcpToken(): Promise<void>;
   authStatus(): Promise<AuthStatus>;
   deviceLogin(): Promise<{ userCode: string; verificationUri: string }>;
   signOutDevice(): Promise<void>;
@@ -124,7 +150,7 @@ export interface Api {
 /** `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). */
 export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string } | 'separator';
 
-export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
+export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'toggle-agent' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 
 export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks'>;
 
@@ -142,6 +168,8 @@ export const API_METHODS = [
   'setViewed',
   'saveDraft',
   'deleteDraft',
+  'acceptDrafts',
+  'deleteDrafts',
   'reply',
   'setResolved',
   'react',
@@ -189,6 +217,16 @@ export const API_METHODS = [
   'checkForUpdate',
   'setupInfo',
   'pickFolder',
+  'askAgent',
+  'stopAgentTurn',
+  'agentSession',
+  'setAgentConnector',
+  'openAgentInDesktop',
+  'deleteTurnDrafts',
+  'mcpStatus',
+  'connectClaudeCode',
+  'copyMcpClientConfig',
+  'resetMcpToken',
   'authStatus',
   'deviceLogin',
   'signOutDevice',

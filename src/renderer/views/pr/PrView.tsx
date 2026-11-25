@@ -14,6 +14,10 @@ import { RunsDialog, RunsIndicator } from './ActionRuns';
 import { showActionsMenu } from '../../state/quickActions';
 import { FilesView } from './FilesView';
 import { Overview } from './Overview';
+import { AgentPanel } from './AgentPanel';
+import { askAgent, useAgentFor } from '../../state/agents';
+import { useAgentSession } from '../../state/sessions';
+import { isSubmittable } from '../../../shared/drafts';
 
 /** GitHub's state pill, plus the review decision when it says more than "review required". */
 function StateBadge({ pr }: { pr: PrPreview }) {
@@ -79,12 +83,38 @@ function MergeButton({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
+/** Review with {agent}: runs the code review into suggestions; the Agent panel opens beside it. */
+function AgentButtons({ snapshot }: { snapshot: PrSnapshot }) {
+  const key = snapshot.key;
+  const agent = useAgentFor(key);
+  const ui = usePrUi(key);
+  const session = useAgentSession(key);
+  if (!agent) return null;
+  const working = session?.turns.some((t) => t.status === 'running' || t.status === 'queued') ?? false;
+  return (
+    <>
+      <Button
+        title={`Ask ${agent.name} to review this pull request with your code-review skill. Its comments arrive as suggestions; nothing goes to GitHub until you submit.`}
+        onClick={() => void askAgent(key, { kind: 'review', prompt: '', target: null })}
+      >
+        Review with {agent.name}
+      </Button>
+      <Button aria-pressed={ui.showAgent} title="The conversation with the agent (⇧⌘A)" onClick={() => updateUi(key, { showAgent: !ui.showAgent })} className={ui.showAgent ? 'bg-chip-on' : ''}>
+        {working ? <span className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" aria-hidden="true" /> : <Icon name="comment" />}
+        Agent
+      </Button>
+    </>
+  );
+}
+
 /** `snapshot` is undefined while the PR first loads: then only `pr` (a preview) is known. */
 function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | undefined; view: PrViewKind }) {
   const key = pr.key;
   const ui = usePrUi(key);
   const d = pr.details;
   const since = snapshot ? sinceLastReview(snapshot) : null;
+  const drafts = snapshot?.drafts.filter(isSubmittable).length ?? 0;
+  const suggestions = (snapshot?.drafts.length ?? 0) - drafts;
   const count = (n: number | undefined) => (n === undefined ? <Pending /> : <span className="px-1.5 rounded-full bg-chip text-[11px]">{n}</span>);
   const views: { value: PrViewKind; label: React.ReactNode }[] = [
     { value: 'overview', label: 'Overview' },
@@ -144,9 +174,15 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
         </Button>
       )}
       {snapshot && view === 'overview' && d.state === 'OPEN' && (d.isDraft ? d.viewerCan.update : d.viewerCan.merge) && <MergeButton snapshot={snapshot} />}
+      {snapshot && <AgentButtons snapshot={snapshot} />}
       <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
         Submit review
-        {snapshot && snapshot.drafts.length > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{snapshot.drafts.length} draft{snapshot.drafts.length === 1 ? '' : 's'}</span>}
+        {drafts > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{drafts} draft{drafts === 1 ? '' : 's'}</span>}
+        {suggestions > 0 && (
+          <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]" title="Comments an agent suggested, waiting for you to accept them">
+            {suggestions} suggested
+          </span>
+        )}
       </Button>
     </div>
   );
@@ -284,10 +320,13 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
           <ErrorBox message={error} onRetry={() => void (snapshot ? api.refreshPr(prKey) : retryPr(prKey))} />
         </div>
       )}
-      <div className="flex-1 min-h-0">
-        {view === 'files' && (snapshot ? <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} /> : <NotYet prKey={prKey} view="files" />)}
-        {view === 'overview' && <Overview pr={pr} snapshot={snapshot} />}
-        {view === 'commits' && (snapshot ? <CommitsView snapshot={snapshot} /> : <NotYet prKey={prKey} view="commits" />)}
+      <div className="flex-1 min-h-0 flex">
+        <div className="flex-1 min-w-0 min-h-0">
+          {view === 'files' && (snapshot ? <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} /> : <NotYet prKey={prKey} view="files" />)}
+          {view === 'overview' && <Overview pr={pr} snapshot={snapshot} />}
+          {view === 'commits' && (snapshot ? <CommitsView snapshot={snapshot} /> : <NotYet prKey={prKey} view="commits" />)}
+        </div>
+        {snapshot && ui.showAgent && <AgentPanel snapshot={snapshot} />}
       </div>
       {snapshot ? (
         <StatusBar snapshot={snapshot} />

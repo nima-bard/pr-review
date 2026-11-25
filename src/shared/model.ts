@@ -113,6 +113,16 @@ export interface FileContent {
   missing: boolean;
 }
 
+/** Who wrote a draft when it wasn't typed in the app: an agent through the PR Review MCP server. */
+export interface DraftOrigin {
+  /** The MCP client or connector name, e.g. "Claude Code". */
+  agent: string;
+  /** The agent turn that asked for it, so a run's drafts can be listed or deleted together. */
+  turnId: string | null;
+  /** When you accepted it; until then it is a suggestion and Submit leaves it out. */
+  acceptedAt: string | null;
+}
+
 export interface Draft {
   id: string;
   path: string;
@@ -125,6 +135,8 @@ export interface Draft {
   createdAt: string;
   postedThreadId?: string;
   unplaceable?: boolean;
+  /** Set for drafts an agent added; absent for your own. */
+  origin?: DraftOrigin;
 }
 
 export interface Version {
@@ -400,7 +412,9 @@ export type PrEvent =
   /** The periodic check found nothing new (a change triggers a refresh, and with it a snapshot). */
   | { type: 'checked'; key: string; at: string }
   /** A background quick action started, printed something or finished. */
-  | { type: 'action'; key: string; run: ActionRun };
+  | { type: 'action'; key: string; run: ActionRun }
+  /** The PR's agent conversation changed (a turn started, streamed, ended). */
+  | { type: 'agent'; key: string; session: AgentSession };
 
 export interface SubmitInput {
   event: ReviewEvent;
@@ -498,6 +512,79 @@ export interface Settings {
   quickActions: QuickAction[];
   /** The terminal app quick actions open in, an id from TERMINALS; empty picks the first one installed. */
   terminalApp: string;
+  /** The MCP server's port on 127.0.0.1 (fixed, so registered clients keep working across restarts). */
+  mcpPort: number;
+  /** Agents the app can ask; the first is the default. Empty until you set one up. */
+  agents: AgentConnector[];
+}
+
+/** An agent the app can ask (Settings › Agents). */
+export interface AgentConnector {
+  id: string;
+  name: string;
+  /**
+   * claude-code: a Claude Code session per PR that the app runs (`claude -p`); claude-desktop: hands the request to a
+   * new Claude Desktop session; claude-terminal: a live Claude Code session in your terminal that requests are pushed
+   * into; command: any command line (Codex, Gemini CLI…).
+   */
+  kind: 'claude-code' | 'claude-desktop' | 'claude-terminal' | 'command';
+  /** `command` only: run by the login shell in the worktree, with the PR_* variables, PR_PROMPT and PR_REQUEST_FILE. */
+  command: string;
+  /** `claude-code` and `claude-terminal`: a model alias or id; empty uses the CLI's default. */
+  model: string;
+}
+
+/** A request from the app to a PR's agent: free text, about some lines, or a whole review. */
+export interface AgentRequest {
+  kind: 'prompt' | 'lines' | 'review';
+  /** What you typed (empty for a review). */
+  prompt: string;
+  /** `lines` only: where "+" was clicked. */
+  target: { path: string; side: DiffSide; startLine: number; endLine: number } | null;
+}
+
+/** One request and its answer, as the Agent panel shows it. */
+export interface AgentTurn {
+  id: string;
+  connectorId: string;
+  /** The connector's name when the turn ran, for labels. */
+  agent: string;
+  request: AgentRequest;
+  startedAt: string;
+  endedAt: string | null;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'handed-off';
+  /** The agent's answer so far (streamed by the claude-code and command connectors). */
+  reply: string;
+  /** Tool activity worth showing, e.g. "Added a draft on src/a.ts:42". */
+  activity: string[];
+  /** Drafts added during this turn. */
+  draftIds: string[];
+  /** In US dollars, when the agent reports it. */
+  costUsd: number | null;
+  error: string | null;
+}
+
+/** A PR's agent conversation: every request continues the same session. */
+export interface AgentSession {
+  connectorId: string;
+  /** The Claude Code session id the app chose (claude-code, claude-terminal), or null. */
+  sessionId: string | null;
+  /** Whether the Claude Code session exists yet (the first run uses --session-id, later ones --resume). */
+  started: boolean;
+  /** Opened in Claude Desktop: the next app request forks (--fork-session), since two writers can lose messages. */
+  continuedInDesktop: boolean;
+  turns: AgentTurn[];
+}
+
+/** The PR Review MCP server, for Settings › Agents. */
+export interface McpStatus {
+  running: boolean;
+  url: string;
+  error: string | null;
+  /** Whether the `claude` CLI is on the PATH (Claude Code, which Claude Desktop's Code tab shares MCP servers with). */
+  claudeInstalled: boolean;
+  /** Whether `claude mcp get pr-review` finds it registered (user scope). */
+  claudeCodeRegistered: boolean;
 }
 
 /**

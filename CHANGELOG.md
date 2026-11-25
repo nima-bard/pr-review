@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Review with Claude, or another agent
+
+- **Review with Claude** on a pull request runs your code review in a Claude Code session in the pull request's worktree. Its findings arrive as **suggestions** on the lines, not on GitHub: **Accept**, **Edit** (saving accepts it) or **Dismiss** each one. Submit review sends only your drafts and the suggestions you accepted, says how many it leaves out, and keeps those for later.
+- **Ask about a line**: the comment editor has **Comment | Ask Claude** (or start with `/ask` or `/claude`). The question goes to Claude with the lines and the comments on them; the answer shows on the line, and a comment it writes appears there as a suggestion.
+- **One conversation per pull request**, in the **Agent panel** (⇧⌘A, or the Agent button): reviews, line questions and requests you type there, with what the agent did, its answer, the comments it added and what it cost. Requests run one at a time; Stop ends one. **Open in Claude Desktop** continues the conversation in the Desktop app.
+- **Not only Claude**: Settings › Agents lists the agents the app can ask: Claude Code in the app, Claude Desktop (hand-off), Claude Code live in your terminal (channels, a research preview), or any command line such as Codex or Gemini CLI. The first one is the default; the Agent panel switches one pull request to another.
+- **An MCP server** in the app (127.0.0.1, with a token) lets any MCP client read the pull requests open in PR Review and add, change or delete its own suggestions. **Connect Claude Code** registers it for Claude Code and Claude Desktop's Code tab; **Copy settings** gives the configuration for other clients. Agents can't post, resolve or merge anything on GitHub.
+
 ## 0.2.0
 
 ### Act on pull requests
