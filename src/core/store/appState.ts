@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isConnectorKind } from '../../shared/agents';
 import type { AgentSession, RepoMapping, Settings, Version } from '../../shared/model';
 import { readJson, writeJson } from './jsonStore';
 
@@ -52,9 +53,11 @@ export class AppState {
   private async load(): Promise<AppStateFile> {
     if (!this.state) {
       const raw = await readJson<Partial<AppStateFile>>(this.file, {});
+      // Settings saved before the first-run setup existed come from an install that's already set up.
+      const settings = { ...DEFAULT_SETTINGS, ...(raw.settings ? { setupDone: true } : {}), ...raw.settings };
       this.state = {
-        // Settings saved before the first-run setup existed come from an install that's already set up.
-        settings: { ...DEFAULT_SETTINGS, ...(raw.settings ? { setupDone: true } : {}), ...raw.settings },
+        // Agents of a kind the app no longer has (the old Claude Desktop hand-off) are dropped.
+        settings: { ...settings, agents: settings.agents.filter((a) => isConnectorKind(a.kind)) },
         repos: raw.repos ?? [],
         openTabs: raw.openTabs ?? [],
         ownedWorktrees: raw.ownedWorktrees ?? [],

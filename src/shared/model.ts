@@ -523,11 +523,11 @@ export interface AgentConnector {
   id: string;
   name: string;
   /**
-   * claude-code: a Claude Code session per PR that the app runs (`claude -p`); claude-desktop: hands the request to a
-   * new Claude Desktop session; claude-terminal: a live Claude Code session in your terminal that requests are pushed
-   * into; command: any command line (Codex, Gemini CLI…).
+   * claude-code: a Claude Code session per PR that the app runs (`claude -p`), with nothing to confirm or send by hand;
+   * claude-terminal: a live Claude Code session in your terminal that requests are pushed into; command: any command
+   * line (Codex, Gemini CLI…).
    */
-  kind: 'claude-code' | 'claude-desktop' | 'claude-terminal' | 'command';
+  kind: 'claude-code' | 'claude-terminal' | 'command';
   /** `command` only: run by the login shell in the worktree, with the PR_* variables, PR_PROMPT and PR_REQUEST_FILE. */
   command: string;
   /** `claude-code` and `claude-terminal`: a model alias or id; empty uses the CLI's default. */

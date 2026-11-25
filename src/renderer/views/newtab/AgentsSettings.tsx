@@ -217,9 +217,10 @@ export function AgentsSettings() {
         <div className="flex flex-col gap-2 p-3.5 rounded-[10px] bg-info-subtle border border-info-line">
           <span className="font-semibold text-strong">Review with Claude</span>
           <span className="text-[12.5px] text-fg leading-relaxed">
-            Claude reviews a pull request with your skills and guidelines, answers questions about a line, and keeps one conversation per pull request that you can open in Claude Desktop. Its comments arrive here as
-            suggestions; nothing goes to GitHub until you accept them and submit.
+            Claude reviews a pull request with your skills and guidelines, answers questions about a line, and keeps one conversation per pull request that you can open in Claude Desktop. Requests run straight away
+            on your Claude Code. Its comments arrive here as suggestions; nothing goes to GitHub until you accept them and submit.
           </span>
+          <span className="text-[12px] text-muted">Set up Claude also adds PR Review’s MCP server (“pr-review”) to your Claude Code settings for all projects.</span>
           {claudeInstalled === false ? (
             <span className="text-[12.5px] text-fg">
               Claude Code isn’t installed.{' '}

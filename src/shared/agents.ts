@@ -3,16 +3,17 @@ import type { AgentConnector, AgentRequest, PrSnapshot } from './model';
 /** Settings › Agents presets; Claude Code is the default. */
 export const AGENT_PRESETS: Omit<AgentConnector, 'id'>[] = [
   { name: 'Claude', kind: 'claude-code', command: '', model: '' },
-  { name: 'Claude Desktop', kind: 'claude-desktop', command: '', model: '' },
   { name: 'Claude in a terminal', kind: 'claude-terminal', command: '', model: '' },
   { name: 'Codex', kind: 'command', command: 'codex exec "$PR_PROMPT"', model: '' },
   { name: 'Gemini', kind: 'command', command: 'gemini -p "$PR_PROMPT"', model: '' },
 ];
 
+/** Whether `kind` is one the app still has (saved settings may hold a removed one, like the old Desktop hand-off). */
+export const isConnectorKind = (kind: string): kind is AgentConnector['kind'] => Object.hasOwn(CONNECTOR_KINDS, kind);
+
 /** What each connector kind does, for Settings. */
 export const CONNECTOR_KINDS: Record<AgentConnector['kind'], { label: string; desc: string }> = {
   'claude-code': { label: 'Claude Code (in the app)', desc: 'One Claude Code session per pull request, run by the app; the conversation shows in the Agent panel and opens in Claude Desktop.' },
-  'claude-desktop': { label: 'Claude Desktop (hand-off)', desc: 'Opens a new Claude Desktop session with the request filled in; you press Enter there. Drafts come back over MCP.' },
   'claude-terminal': {
     label: 'Claude Code (in a terminal)',
     desc: 'A live Claude Code session in your terminal that the app pushes requests into (channels, a research preview). Replies stay in the terminal.',

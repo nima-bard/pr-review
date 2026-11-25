@@ -52,10 +52,9 @@ From then on, GitHub pull request links open in PR Review, whether you click the
 
 ### Agents
 
-Settings › Agents starts empty. **Set up Claude** adds Claude (Claude Code must be installed) and, after you confirm, registers PR Review's MCP server with Claude Code for all projects, which Claude Desktop's Code tab shares. Then each pull request gets **Review with Claude**, an **Agent** panel and **Ask Claude** in the comment editor.
+Settings › Agents starts empty. **Set up Claude** adds Claude (Claude Code must be installed) and registers PR Review's MCP server with Claude Code for all projects, which Claude Desktop's Code tab shares. Requests run straight away: nothing to confirm or send by hand. Then each pull request gets **Review with Claude**, an **Agent** panel and **Ask Claude** in the comment editor.
 
 - **Claude Code (in the app)**, the default: one headless Claude Code session per pull request, run in its worktree with your skills and CLAUDE.md. A review may read the code and the pull request, not edit files or post to GitHub. Each reply shows its cost. **Open in Claude Desktop** continues the same conversation there; requests from the app then start a branch of it, so neither side loses messages.
-- **Claude Desktop (hand-off)**: opens a new Claude Desktop session with the request filled in; you press Enter there.
 - **Claude Code (in a terminal)**: a live session in your terminal that the app pushes requests into. It uses Claude Code's channels (a research preview): your organisation must allow them (`channelsEnabled`), and Claude Code shows a warning for the development channel.
 - **Command**: any agent with a command line, such as `codex exec "$PR_PROMPT"` or `gemini -p "$PR_PROMPT"`, run in the worktree with the quick-action variables plus `PR_PROMPT` and `PR_REQUEST_FILE`. Give it the MCP server (Settings › Agents › Copy settings) for its comments to arrive as suggestions.
 

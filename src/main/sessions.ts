@@ -27,7 +27,6 @@ import { McpTokenStore } from './mcpToken';
 import { agentPrompt, type LineContext } from '../shared/agents';
 import { AgentRunner } from './agents/agentRunner';
 import { claudeCode } from './agents/claudeCode';
-import { claudeDesktop } from './agents/claudeDesktop';
 import { claudeTerminal } from './agents/claudeTerminal';
 import { commandConnector } from './agents/command';
 import { claudeBin, runWithTerminal, type Connector } from './agents/connector';
@@ -55,8 +54,6 @@ export interface RegistryHost {
   notify(title: string, body: string, url: string): void;
   /** Puts text on the clipboard (for secrets the page mustn't see). */
   copyText(text: string): void;
-  /** Opens a Claude Desktop link; only `claude://code/new?…` links are accepted. */
-  openClaudeLink(url: string): Promise<void>;
 }
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -135,8 +132,6 @@ export class SessionRegistry implements ChannelBridge {
     switch (kind) {
       case 'claude-code':
         return claudeCode;
-      case 'claude-desktop':
-        return claudeDesktop((url) => this.host.openClaudeLink(url));
       case 'claude-terminal':
         return claudeTerminal({
           openTerminal: async (cwd, env, command, name) => openInTerminal((await this.appState.settings()).terminalApp, cwd, env, command, name),
@@ -188,16 +183,13 @@ export class SessionRegistry implements ChannelBridge {
     return { running: this.mcp !== null && error === null, url: this.mcp?.url ?? `http://127.0.0.1:${mcpPort}/mcp`, error, claudeInstalled: installed, claudeCodeRegistered: registered };
   }
 
-  /** Registers the MCP server with Claude Code for every project (user scope), replacing an older registration. */
+  /**
+   * Registers the MCP server with Claude Code for every project (user scope), replacing an older registration. The
+   * Set up Claude click is the go-ahead; Settings › Agents says what it adds.
+   */
   private async connectClaudeCode(): Promise<void> {
     if (!process.env.PR_REVIEW_CLAUDE && !(await findTool('claude'))) throw new Error('Claude Code is not installed. Install it from https://code.claude.com, then try again.');
     const url = await this.mcpUrl();
-    const ok = await this.host.confirm(
-      'Connect Claude Code to PR Review?',
-      `Adds the MCP server "pr-review" (${url}) to your Claude Code settings for all projects. Claude Code and Claude Desktop's Code tab can then read the pull requests open here and add draft comments. Nothing is posted to GitHub without you.`,
-      'Connect',
-    );
-    if (!ok) return;
     await claude(['mcp', 'remove', '-s', 'user', 'pr-review']).catch(() => undefined);
     await claude(['mcp', 'add', '--transport', 'http', '-s', 'user', 'pr-review', url, '-H', `Authorization: Bearer ${await this.mcpTokens.get()}`]);
   }

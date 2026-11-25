@@ -277,11 +277,6 @@ void app.whenReady().then(async () => {
       return response === 0;
     },
     copyText: (text) => clipboard.writeText(text),
-    // Only "new session" links: nothing else of Claude Desktop's can be reached from the app.
-    openClaudeLink: async (url) => {
-      if (!url.startsWith('claude://code/new?')) throw new Error('Only links that start a new Claude Desktop session can be opened.');
-      await shell.openExternal(url);
-    },
     notify: (title, body, url) => {
       // In the app, the status bar shows it.
       if (BrowserWindow.getFocusedWindow() || !Notification.isSupported()) return;
