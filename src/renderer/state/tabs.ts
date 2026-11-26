@@ -4,7 +4,8 @@ import { parsePrInput } from '../../shared/prInput';
 import { api, errorText } from '../api';
 import { markOpened } from './recents';
 import { moveToSlot } from './reorder';
-import { checkSoon, forgetSession, setSessionError } from './sessions';
+import { tabsToRestore } from './restore';
+import { checkSoon, forgetSession, loadSnapshot, setSessionError } from './sessions';
 import { showSettingsSection, type SettingsSection } from './settingsPage';
 
 /**
@@ -118,6 +119,7 @@ export async function popOutTab(id: string): Promise<void> {
 export async function openPr(input: string, fromId?: string): Promise<OpenPrResult> {
   const result = await api.openPr(input);
   if (!result.ok) return result;
+  void loadSnapshot(result.key);
   markOpened(result.key);
   const { tabs } = useTabs.getState();
   const existing = tabs.find((t) => t.kind === 'pr' && t.key === result.key);
@@ -152,6 +154,7 @@ async function openSession(key: string, input: string): Promise<void> {
   setSessionError(key, undefined);
   const result = await api.openPr(input).catch((err: unknown): OpenPrResult => ({ ok: false, reason: 'error', message: errorText(err) }));
   if (!result.ok) setSessionError(key, result.message);
+  else void loadSnapshot(key);
 }
 
 /** The PR view's Retry when no snapshot arrived: open the session if needed, then refresh it. */
@@ -186,12 +189,8 @@ useTabs.subscribe((state, prev) => {
 export async function restoreTabs(): Promise<void> {
   if (popOutKey) return;
   const inputs = await api.getOpenTabs();
-  const restored: PrTab[] = [];
-  for (const input of inputs) {
-    const ref = parsePrInput(input);
-    if (!ref || restored.some((t) => t.key === prKey(ref))) continue;
-    restored.push({ id: newId(), kind: 'pr', key: prKey(ref), input, dormant: true });
-  }
+  const open = new Set(useTabs.getState().tabs.flatMap((t) => (t.kind === 'pr' ? [t.key] : [])));
+  const restored: PrTab[] = tabsToRestore(inputs, open).map((t) => ({ id: newId(), kind: 'pr', ...t, dormant: true }));
   if (restored.length === 0) return;
   const savedActive = loadActiveInput();
   const active = restored.find((t) => t.input === savedActive) ?? restored.at(-1)!;

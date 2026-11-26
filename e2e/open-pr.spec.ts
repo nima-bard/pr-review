@@ -195,3 +195,16 @@ test('opens a PR into a worktree, re-anchors an outdated thread and submits a re
   const submit = received.find((r) => r.query.includes('submitPullRequestReview('));
   expect(submit?.vars).toMatchObject({ reviewId: 'R1', event: 'COMMENT', body: 'Two small things.' });
 });
+
+test('a window reopened from the Dock shows the pull request that was open', async () => {
+  // macOS keeps the app (and the pull request's session) running when the last window closes; elsewhere it quits.
+  test.skip(process.platform !== 'darwin', 'Closing the last window quits the app outside macOS.');
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close());
+  await expect.poll(() => app.windows().length).toBe(0);
+  const reopened = app.waitForEvent('window');
+  await app.evaluate(({ app: electronApp }) => electronApp.emit('activate'));
+  win = await reopened;
+  // The restored tab opens a session that already exists, so no new snapshot event comes: the page has to ask for it.
+  await expect(win.getByRole('heading', { name: 'Apply loyalty discount' })).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Opening pull request…')).toBeHidden();
+});

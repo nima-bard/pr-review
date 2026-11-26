@@ -72,7 +72,11 @@ export function dismissRun(key: string, id: string): void {
   useSessions.setState((s) => ({ runs: { ...s.runs, [key]: (s.runs[key] ?? []).filter((r) => r.id !== id) } }));
 }
 
-/** The PR's current snapshot, for a window that opens on a session that's already loaded (a popped-out tab). */
+/**
+ * The PR's current snapshot, when this window opens a session that's already loaded: a popped-out tab, a window
+ * reopened from the Dock, or a pull request already open in another window. The main process sends snapshots only when
+ * something changes, so without this such a tab would wait on "Opening pull request…". A no-op once one has arrived.
+ */
 export async function loadSnapshot(key: string): Promise<void> {
   const snapshot = await api.getSnapshot(key).catch(() => null);
   if (!snapshot || useSessions.getState().snapshots[key]) return;

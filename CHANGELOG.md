@@ -13,7 +13,7 @@
 
 ### Fixes
 
-- A pull request popped out into its own window showed "Opening pull request…" until it next changed on GitHub.
+- A pull request could stay on “Opening pull request…” until it next changed on GitHub: in a window reopened from the Dock after you closed the last one (#1), when popped out into its own window, or when opened again while it was open in another window.
 - Filter menus in All pull requests stayed open when you opened another one or clicked elsewhere.
 - In a collapsed conversation the text sat a little higher than the arrow and buttons beside it.
 - After you resolved a conversation, “Unresolve conversation” only appeared once the pull request next synced with GitHub.
