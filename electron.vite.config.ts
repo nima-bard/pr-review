@@ -6,7 +6,9 @@ import { fileIcons, isIconAsset } from './scripts/fileIconsPlugin';
 
 export default defineConfig({
   main: {
-    build: { rollupOptions: { input: { index: resolve('src/main/index.ts') } } },
+    // Its packages are bundled: the app ships without node_modules. The Agent SDK, loaded when first needed, becomes
+    // a chunk of its own.
+    build: { externalizeDeps: false, rollupOptions: { input: { index: resolve('src/main/index.ts') }, external: ['electron'] } },
   },
   preload: {
     build: {

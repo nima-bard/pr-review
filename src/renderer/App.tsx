@@ -3,14 +3,17 @@ import { api } from './api';
 import { TabBar } from './components/TabBar';
 import { refreshInbox } from './state/inbox';
 import { startDockTabs } from './state/dockTabs';
+import { startRevealEvents } from './state/reveal';
 import { checkSoon, startSessionEvents, useSessions } from './state/sessions';
 import { loadQuickActions, prActions, runQuickAction } from './state/quickActions';
+import { loadClaudeSettings, useClaudeSettings } from './state/claude';
 import { loadAppSettings } from './state/settings';
 import { activate, activateIndex, closePrTabs, closeTab, newTab, openPr, openPrLink, openSettings, popOutKey, restoreTabs, useTabs } from './state/tabs';
 import { getPrUi, openFind, setPrefs, showSearch, stepFind, updateUi, usePrefs } from './state/ui';
 import { NewTab } from './views/newtab/NewTab';
 import { SettingsView } from './views/newtab/SettingsView';
 import { PrView } from './views/pr/PrView';
+import { toggleSidePanel } from './views/pr/SidePanel';
 import { showSetup, useSetup } from './state/setup';
 import { startUpdateChecks } from './state/updates';
 import { SetupWizard } from './views/setup/SetupWizard';
@@ -35,6 +38,7 @@ export function App() {
 
   useEffect(() => {
     const stopEvents = startSessionEvents(closePrTabs);
+    const stopReveals = startRevealEvents();
     const stopDock = startDockTabs();
     const stopActivate = api.onActivateTab(activate);
     void loadAppSettings();
@@ -48,6 +52,7 @@ export function App() {
     window.addEventListener('focus', onFocus);
     const restored = restoreTabs();
     void loadQuickActions();
+    void loadClaudeSettings();
     void refreshInbox();
     const inboxTimer = setInterval(() => void refreshInbox(true, true), 3 * 60_000);
     const stopUpdates = popOutKey ? () => undefined : startUpdateChecks();
@@ -70,11 +75,12 @@ export function App() {
       else if (tab?.kind === 'pr') {
         if (action === 'refresh') void api.refreshPr(tab.key);
         if (action === 'toggle-tree') updateUi(tab.key, { showTree: !getPrUi(tab.key).showTree });
-        if (action === 'toggle-conversations') updateUi(tab.key, { showPanel: !getPrUi(tab.key).showPanel });
+        if (action === 'toggle-comments') toggleSidePanel(tab.key, 'comments');
         if (action === 'find-in-files') showSearch(tab.key, selectedCode());
         if (action === 'find') openFind(tab.key, selectedCode());
         if (action === 'find-next') stepFind(tab.key, 1);
         if (action === 'find-previous') stepFind(tab.key, -1);
+        if (action === 'toggle-claude' && useClaudeSettings.getState().enabled) toggleSidePanel(tab.key, 'claude');
         if (action === 'show-files') updateUi(tab.key, { view: 'files', showTree: true, sidebar: 'files' });
       }
     });
@@ -101,6 +107,7 @@ export function App() {
       stopEvents();
       stopDock();
       stopActivate();
+      stopReveals();
       stopMenu();
       stopOpen();
       clearInterval(inboxTimer);

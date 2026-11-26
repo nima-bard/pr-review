@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActionRun, PrPreview, PrSnapshot } from '../../shared/model';
+import type { ActionRun, ClaudeView, PrPreview, PrSnapshot } from '../../shared/model';
 import { api } from '../api';
 import { rememberSnapshot } from './recents';
 
@@ -13,9 +13,11 @@ interface SessionsState {
   runs: Record<string, ActionRun[]>;
   /** When the PR was last checked for changes on GitHub (a sync counts too). */
   checkedAt: Record<string, string | undefined>;
+  /** Each PR's Claude session as its conversation shows it (see `ClaudeView`), once loaded. */
+  claude: Record<string, ClaudeView>;
 }
 
-export const useSessions = create<SessionsState>(() => ({ snapshots: {}, previews: {}, runs: {}, progress: {}, errors: {}, checkedAt: {} }));
+export const useSessions = create<SessionsState>(() => ({ snapshots: {}, previews: {}, runs: {}, progress: {}, errors: {}, checkedAt: {}, claude: {} }));
 
 /** Listens to the main process's PR events; `onClosed` closes the tabs of a PR whose session ended there. */
 export function startSessionEvents(onClosed: (key: string) => void): () => void {
@@ -25,6 +27,8 @@ export function startSessionEvents(onClosed: (key: string) => void): () => void 
       onClosed(event.key);
       return;
     }
+    // Not state: `startRevealEvents` acts on it.
+    if (event.type === 'reveal') return;
     if (event.type === 'snapshot') rememberSnapshot(event.snapshot);
     useSessions.setState((s) => {
       if (event.type === 'snapshot') {
@@ -42,6 +46,7 @@ export function startSessionEvents(onClosed: (key: string) => void): () => void 
         const known = list.some((r) => r.id === event.run.id);
         return { runs: { ...s.runs, [event.key]: known ? list.map((r) => (r.id === event.run.id ? event.run : r)) : [event.run, ...list] } };
       }
+      if (event.type === 'claude') return { claude: { ...s.claude, [event.key]: event.view } };
       if (event.type === 'preview') return { previews: { ...s.previews, [event.key]: event.preview } };
       if (event.type === 'checked') return { checkedAt: { ...s.checkedAt, [event.key]: event.at } };
       if (event.type === 'progress') return { progress: { ...s.progress, [event.key]: event.message } };
@@ -64,6 +69,16 @@ export function checkSoon(key: string): void {
 export async function loadRuns(key: string): Promise<void> {
   const runs = await api.quickActionRuns(key);
   useSessions.setState((s) => ({ runs: { ...s.runs, [key]: runs } }));
+}
+
+/** The PR's Claude session as the main process reads it (null while Claude is off in Settings). */
+export async function loadClaudeView(key: string): Promise<void> {
+  const view = await api.claudeView(key);
+  if (view) useSessions.setState((s) => ({ claude: { ...s.claude, [key]: view } }));
+}
+
+export function useClaudeView(key: string): ClaudeView | undefined {
+  return useSessions((s) => s.claude[key]);
 }
 
 /** Forgets a finished run, here and in the main process. */

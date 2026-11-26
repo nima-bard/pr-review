@@ -41,6 +41,7 @@ function toItem(s: PrSnapshot): SearchItem {
     ref: s.ref,
     title: d.title,
     author: d.author,
+    authorAvatarUrl: d.authorAvatarUrl,
     isDraft: d.isDraft,
     state: d.state,
     createdAt: d.createdAt,

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { GitHubClient } from '../../../src/core/github/client';
-import { setResolved, submitReview, threadInput } from '../../../src/core/github/reviews';
+import { setResolved, setViewed, submitReview, threadInput, transientGitHubError } from '../../../src/core/github/reviews';
+import { GitHubError } from '../../../src/core/github/client';
 import { normalizeQuery } from '../../../src/core/github/search';
 import { DraftStore } from '../../../src/core/store/drafts';
 import type { Draft } from '../../../src/shared/model';
@@ -76,6 +77,15 @@ describe('submitReview', () => {
     expect(posted).toEqual(['comment b', 'comment c']);
   });
 
+  it('posts the drafts an agent wrote with your own, with nothing to accept first, and clears them all', async () => {
+    const drafts = new DraftStore((k) => join(dir, `${k}.json`));
+    await drafts.saveAll('pr3', [draft('own'), draft('claude', { origin: { agent: 'Claude' } })]);
+    const { client, calls } = fakeClient();
+    await submitReview({ client, drafts, prKey: 'pr3', pullRequestId: 'PR_3', headOid: 'h1', pendingReviewId: 'R', event: 'COMMENT', body: '', spacingMs: 0 });
+    expect(calls.filter((c) => c.query.includes('addPullRequestReviewThread(')).map((c) => c.vars.body)).toEqual(['comment own', 'comment claude']);
+    expect(await drafts.list('pr3')).toEqual([]);
+  });
+
   it('file comments use subjectType FILE without a line', () => {
     expect(threadInput('R', draft('f', { subject: 'file' }))).toEqual({ reviewId: 'R', path: 'src/a.ts', body: 'comment f', subjectType: 'FILE' });
   });
@@ -139,5 +149,45 @@ describe('setResolved', () => {
 
   it('fails when GitHub returns no thread', async () => {
     await expect(setResolved(answering({}).client, 'T1', true)).rejects.toThrow('did not return');
+  });
+});
+
+describe('setViewed', () => {
+  /** GitHub failing `failures[path]` times for each file, with `error`, then marking it. */
+  function flaky(failures: Record<string, number>, error: () => Error) {
+    const calls: string[] = [];
+    const client = {
+      async graphql(_query: string, vars: Record<string, unknown>) {
+        const path = String(vars.path);
+        calls.push(path);
+        if ((failures[path] ?? 0) > 0) {
+          failures[path]!--;
+          throw error();
+        }
+        return {};
+      },
+    } as unknown as GitHubClient;
+    return { client, calls };
+  }
+  const noWait = async () => undefined;
+
+  it("tries GitHub's passing failures again, and carries on past a file it keeps refusing", async () => {
+    const { client, calls } = flaky({ 'b.kusto': 1, 'c.kusto': 9 }, () => new Error('GitHub: Something went wrong while executing your query'));
+    const failed = await setViewed(client, 'PR_1', ['a.kusto', 'b.kusto', 'c.kusto', 'd.kusto'], true, noWait);
+    expect(failed).toEqual([{ path: 'c.kusto', error: 'GitHub: Something went wrong while executing your query' }]);
+    // b once more; c three times in all; d still marked after c gave up.
+    expect(calls).toEqual(['a.kusto', 'b.kusto', 'b.kusto', 'c.kusto', 'c.kusto', 'c.kusto', 'd.kusto']);
+  });
+
+  it('does not try again what GitHub refuses for good', async () => {
+    const { client, calls } = flaky({ 'a.kusto': 1 }, () => new Error('GitHub: Resource not accessible by integration'));
+    expect(await setViewed(client, 'PR_1', ['a.kusto'], true, noWait)).toHaveLength(1);
+    expect(calls).toEqual(['a.kusto']);
+  });
+
+  it('counts server errors and dropped connections as passing', () => {
+    expect(transientGitHubError(new GitHubError('GitHub GraphQL request failed: HTTP 502', 502))).toBe(true);
+    expect(transientGitHubError(new Error('read ECONNRESET'))).toBe(true);
+    expect(transientGitHubError(new GitHubError('GitHub GraphQL request failed: HTTP 401', 401))).toBe(false);
   });
 });

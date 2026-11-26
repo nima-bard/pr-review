@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { PrSnapshot, ReviewEvent } from '../../shared/model';
 import { api, errorText } from '../api';
-import { Badge, Button, cx, ErrorBox, Icon } from '../components/ui';
+import { Badge, Button, cx, ErrorBox, Icon, MarkdownText } from '../components/ui';
 import { discardUnsent, unsentComments } from '../diff/Composer';
 import { focusFile, loadSummary, requestComposer, saveSummary, updateUi } from '../state/ui';
 
@@ -10,6 +10,37 @@ const VERDICTS: { id: ReviewEvent; title: string; desc: string; tone: string }[]
   { id: 'APPROVE', title: 'Approve', desc: 'Merge once checks pass.', tone: 'text-add-strong' },
   { id: 'REQUEST_CHANGES', title: 'Request changes', desc: 'Must be addressed before merging.', tone: 'text-del-strong' },
 ];
+
+/** A comment's file and lines on one line: like github.com, the folders give way first (cut from the left), so the name stays. */
+function PathLine({ path, lines }: { path: string; lines: string }) {
+  const dir = path.slice(0, path.lastIndexOf('/') + 1);
+  return (
+    <span className="flex min-w-0 font-mono text-[11.5px]" title={path}>
+      {dir && (
+        <span className="truncate text-muted" style={{ direction: 'rtl', flexShrink: 1000 }}>
+          <bdi>{dir}</bdi>
+        </span>
+      )}
+      <span className="truncate text-strong shrink-0 max-w-full">{path.slice(dir.length)}</span>
+      <span className="text-muted whitespace-nowrap flex-none">&nbsp;· {lines}</span>
+    </span>
+  );
+}
+
+/** A comment as GitHub will show it (Markdown): its first lines, fading out when there's more. */
+function DraftBody({ body }: { body: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el) setMore(el.scrollHeight > el.clientHeight + 1);
+  }, [body]);
+  return (
+    <div ref={ref} className={cx('max-h-[112px] overflow-hidden', more && '[mask-image:linear-gradient(to_bottom,black_65%,transparent)]')}>
+      <MarkdownText text={body} className="text-comment text-fg break-words" />
+    </div>
+  );
+}
 
 export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
   const key = snapshot.key;
@@ -21,8 +52,10 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
   const own = snapshot.role === 'author';
   const verdicts = own ? VERDICTS.filter((v) => v.id === 'COMMENT') : VERDICTS;
   const pendingFromWeb = snapshot.pendingReview?.commentCount ?? 0;
-  const empty = snapshot.drafts.length === 0 && pendingFromWeb === 0 && summary.trim() === '' && event === 'COMMENT';
-  const blocked = snapshot.drafts.some((d) => d.unplaceable);
+  // Every draft goes out, the ones an agent wrote too (they're marked "from …").
+  const drafts = snapshot.drafts;
+  const empty = drafts.length === 0 && pendingFromWeb === 0 && summary.trim() === '' && event === 'COMMENT';
+  const blocked = drafts.some((d) => d.unplaceable);
   // Typed but never added: not part of the review, so say so before it goes out without them.
   const [unsent, setUnsent] = useState(() => unsentComments(key, snapshot.drafts));
 
@@ -55,7 +88,7 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
             <Icon name="close" size={13} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-3.5">
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pb-4 flex flex-col gap-3.5">
           {pendingFromWeb > 0 && (
             <div className="flex gap-2.5 px-3 py-2.5 rounded-[9px] bg-info-subtle border border-info-line">
               <Icon name="info" size={16} className="text-info mt-0.5" />
@@ -73,11 +106,8 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
               {unsent.map((u) => (
                 <div key={u.storageKey} className="flex gap-2.5 items-start px-3 py-2 rounded-[8px] bg-panel border border-line-2">
                   <span className="flex-1 min-w-0 flex flex-col gap-1">
-                    <span className="font-mono text-[11.5px] text-soft">
-                      {u.target.path} · {u.target.startLine !== u.target.endLine ? `L${u.target.startLine}–${u.target.endLine}` : `L${u.target.endLine}`}
-                      {u.target.draftId ? ' · unsaved edit of a draft' : ''}
-                    </span>
-                    <span className="text-fg whitespace-pre-wrap line-clamp-3">{u.text}</span>
+                    <PathLine path={u.target.path} lines={`${u.target.startLine !== u.target.endLine ? `L${u.target.startLine}–${u.target.endLine}` : `L${u.target.endLine}`}${u.target.draftId ? ' · unsaved edit of a draft' : ''}`} />
+                    <DraftBody body={u.text} />
                   </span>
                   <Button
                     size="sm"
@@ -105,23 +135,22 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
           )}
           <section aria-labelledby="drafts-h" className="flex flex-col gap-2">
             <h3 id="drafts-h" className="text-[13px] font-semibold text-strong">
-              Comments in this review <span className="text-muted font-normal">{snapshot.drafts.length + pendingFromWeb}</span>
+              Comments in this review <span className="text-muted font-normal">{drafts.length + pendingFromWeb}</span>
             </h3>
-            {snapshot.drafts.length === 0 && <div className="text-muted text-[12.5px]">No draft comments. Hover a diff line and click "+" to add one.</div>}
-            {snapshot.drafts.map((d) => (
+            {drafts.length === 0 && <div className="text-muted text-[12.5px]">No draft comments. Hover a diff line and click "+" to add one.</div>}
+            {drafts.map((d) => (
               <div key={d.id} className="flex gap-2.5 items-start px-3 py-2.5 rounded-[9px] bg-panel border border-line-2">
-                <span className="flex-1 min-w-0 flex flex-col gap-1">
+                <span className="flex-1 min-w-0 flex flex-col gap-1.5">
+                  <PathLine path={d.path} lines={d.startLine !== undefined ? `L${d.startLine}–${d.line}` : `L${d.line}`} />
                   <span className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-[11.5px] text-soft">
-                      {d.path} · {d.startLine !== undefined ? `L${d.startLine}–${d.line}` : `L${d.line}`}
-                    </span>
-                    {d.postedThreadId ? <Badge tone="ok">Posted, awaiting submit</Badge> : <Badge tone="info">Local draft</Badge>}
+                    {d.postedThreadId ? <Badge tone="ok">Posted, awaiting submit</Badge> : <Badge tone="info">{d.origin ? `Local draft · from ${d.origin.agent}` : 'Local draft'}</Badge>}
                     {d.unplaceable && <Badge tone="bad">Line changed in a new push · move or delete</Badge>}
                   </span>
-                  <span className="text-fg whitespace-pre-wrap line-clamp-4">{d.body}</span>
+                  <DraftBody body={d.body} />
                 </span>
                 <Button
                   size="sm"
+                  className="flex-none"
                   onClick={() => {
                     close();
                     focusFile(key, d.path);
@@ -129,7 +158,7 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
                 >
                   Show
                 </Button>
-                <button type="button" aria-label={`Delete comment on ${d.path}`} onClick={() => void api.deleteDraft(key, d.id)} className="grid place-items-center w-[26px] h-[26px] rounded-md bg-raised-2 border border-line-2 text-fg cursor-pointer">
+                <button type="button" aria-label={`Delete comment on ${d.path}`} onClick={() => void api.deleteDraft(key, d.id)} className="grid place-items-center flex-none w-[26px] h-[26px] rounded-md bg-raised-2 border border-line-2 text-fg cursor-pointer">
                   <Icon name="trash" size={12} />
                 </button>
               </div>
@@ -171,7 +200,7 @@ export function SubmitReviewDialog({ snapshot }: { snapshot: PrSnapshot }) {
           <span className="flex-1 text-[12px] text-muted">Drafts are saved locally and only go to GitHub when you submit.</span>
           <Button onClick={close}>Keep drafting</Button>
           <Button variant="primary" disabled={busy || empty || blocked} title={blocked ? 'Move or delete drafts on changed lines first' : undefined} onClick={() => void submit()}>
-            {busy ? 'Submitting…' : 'Submit review'}
+            {busy ? 'Submitting…' : drafts.length > 0 ? `Submit review (${drafts.length})` : 'Submit review'}
           </Button>
         </div>
       </div>

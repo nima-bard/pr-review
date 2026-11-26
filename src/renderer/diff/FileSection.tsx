@@ -1,6 +1,7 @@
 import { FileDiff } from '@pierre/diffs/react';
 import type { DiffLineAnnotation, FileDiffMetadata, SelectedLineRange } from '@pierre/diffs';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { asks as allAsks, type Ask } from '../../shared/agents';
 import type { DiffSide, Draft, FileEntry, PrSnapshot, ThreadView } from '../../shared/model';
 import { api } from '../api';
 import { Badge, Button, cx, Icon, Spinner } from '../components/ui';
@@ -11,12 +12,14 @@ import { showFileMenu } from '../components/fileMenu';
 import { Octicon } from '../components/octicons';
 import { useDiffAppearance } from '../state/settings';
 import { Composer, DraftCard } from './Composer';
+import { AskCard } from './AskCard';
+import { useClaudeView } from '../state/sessions';
 import { ThreadCard } from './ThreadCard';
 import { StickyScrollbars } from './StickyScrollbars';
 import { loadFile, useFileDiff } from './useFileDiff';
 import { useFocusLine } from './useFocusLine';
 
-type Meta = { kind: 'thread'; thread: ThreadView } | { kind: 'draft'; draft: Draft } | { kind: 'composer'; target: ComposerTarget };
+type Meta = { kind: 'thread'; thread: ThreadView } | { kind: 'draft'; draft: Draft } | { kind: 'composer'; target: ComposerTarget } | { kind: 'ask'; ask: Ask };
 
 const CHANGE_LETTER: Record<FileEntry['change'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', copied: 'C' };
 export const changeColor = (c: FileEntry['change']) => (c === 'added' ? 'var(--c-add)' : c === 'deleted' ? 'var(--c-del)' : c === 'renamed' ? 'var(--c-info)' : 'var(--c-mod)');
@@ -84,6 +87,11 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
     [snapshot, file.path, hideResolved, ui.focusThread],
   );
   const drafts = useMemo(() => snapshot.drafts.filter((d) => d.path === file.path), [snapshot.drafts, file.path]);
+  const claude = useClaudeView(key);
+  const asks = useMemo(
+    () => (claude ? allAsks(claude).filter((a) => a.request.kind === 'lines' && a.request.target?.path === file.path && !claude.hiddenMarkers.includes(a.id)) : []),
+    [claude, file.path],
+  );
   const [selection, setSelection] = useState<SelectedLineRange | null>(null);
   // Read by the "+" handler, so the options (and with them the whole diff) don't change on every line of a drag.
   const selectionRef = useRef(selection);
@@ -124,11 +132,15 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
       if (ui.composer?.draftId === d.id) continue;
       annotations.push({ side: toPierreSide(d.side), lineNumber: d.line, metadata: { kind: 'draft', draft: d } });
     }
+    for (const t of asks) {
+      const target = t.request.target!;
+      if (fullFile || placeable(target.side, target.endLine)) annotations.push({ side: toPierreSide(target.side), lineNumber: target.endLine, metadata: { kind: 'ask', ask: t } });
+    }
     if (ui.composer && ui.composer.path === file.path) {
       annotations.push({ side: toPierreSide(ui.composer.side), lineNumber: ui.composer.endLine, metadata: { kind: 'composer', target: ui.composer } });
     }
     return { annotations, outside };
-  }, [threads, drafts, ui.composer, file.path, placeable, fullFile]);
+  }, [threads, drafts, asks, ui.composer, file.path, placeable, fullFile]);
 
   const startComment = useCallback(
     (range: SelectedLineRange) => {
@@ -163,6 +175,7 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
         <div className="py-2.5 pr-4 pl-3 bg-inset border-y border-line">
           {m.kind === 'thread' && <ThreadCard snapshot={snapshot} thread={m.thread} focused={ui.focusThread === m.thread.id} />}
           {m.kind === 'draft' && <DraftCard snapshot={snapshot} draft={m.draft} />}
+          {m.kind === 'ask' && <AskCard snapshot={snapshot} ask={m.ask} />}
           {/* Keyed per line, so opening another line gets a fresh editor instead of reusing this one's text. */}
           {m.kind === 'composer' && <Composer key={unsentKey(key, m.target)} snapshot={snapshot} target={m.target} />}
         </div>

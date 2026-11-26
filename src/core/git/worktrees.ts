@@ -131,6 +131,11 @@ export async function moveOwnedDetached(path: string, headOid: string): Promise<
   return 'moved';
 }
 
+/** A worktree's own git folder (`.git/worktrees/<name>` for a linked one): never committed, and removed with it. */
+export async function gitDir(worktree: string): Promise<string> {
+  return (await git(worktree, ['rev-parse', '--absolute-git-dir'])).trim();
+}
+
 /**
  * Why removing this worktree would lose something, or null when it wouldn't: it's locked (another tool is using it),
  * it has uncommitted changes (untracked files too), or its detached HEAD is on no branch or other ref. A branch

@@ -18,9 +18,9 @@ import { useFocusLine } from '../../diff/useFocusLine';
 import { useSearchHighlights } from '../../diff/useSearchHighlights';
 import { useFindInView } from '../../diff/useFindInView';
 import { FindBar } from './FindBar';
-import { ConversationsPanel } from './ConversationsPanel';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
+import { SidePanel } from './SidePanel';
 
 async function showTabMenu(snapshot: PrSnapshot, id: string): Promise<void> {
   const key = snapshot.key;
@@ -153,8 +153,10 @@ function AllChanges({ snapshot }: { snapshot: PrSnapshot }) {
   useEffect(() => {
     const path = ui.focusPath;
     const threadId = ui.focusThread;
+    const elementId = ui.focusElement;
     if (!path) return;
-    if (ui.collapsed[path]) updateUi(snapshot.key, (u) => ({ collapsed: { ...u.collapsed, [path]: false } }));
+    // Unfolded, also when it's folded for being viewed (no entry yet), so the thread or line is there to show.
+    if (ui.collapsed[path] !== false) updateUi(snapshot.key, (u) => ({ collapsed: { ...u.collapsed, [path]: false } }));
     const content = list.current;
     const scroller = content?.closest<HTMLElement>('.overflow-y-auto') ?? null;
     // Sections load lazily as they near the viewport, and the target's own diff loads too, so heights keep changing
@@ -162,7 +164,8 @@ function AllChanges({ snapshot }: { snapshot: PrSnapshot }) {
     let pinned = true;
     const align = () => {
       if (!pinned) return;
-      const thread = threadId ? document.getElementById(`thread-${threadId}`) : null;
+      // A thread, or another element on a line (a draft, an ask's marker); else the file's top.
+      const thread = (threadId ? document.getElementById(`thread-${threadId}`) : null) ?? (elementId ? document.getElementById(elementId) : null);
       (thread ?? document.getElementById(`file-${path}`))?.scrollIntoView({ block: thread ? 'center' : 'start' });
     };
     align();
@@ -180,7 +183,7 @@ function AllChanges({ snapshot }: { snapshot: PrSnapshot }) {
       clearTimeout(timeout);
       for (const e of userEvents) scroller?.removeEventListener(e, release);
     };
-  }, [ui.focusPath, ui.focusThread, ui.focusSeq, snapshot.key]);
+  }, [ui.focusPath, ui.focusThread, ui.focusElement, ui.focusSeq, snapshot.key]);
   if (sorted.length === 0) return <div className="p-6 text-muted">This pull request has no file changes.</div>;
   return (
     <div ref={list} className="flex flex-col gap-3.5 p-4 pb-10">
@@ -411,7 +414,7 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
   const [help, setHelp] = useState(false);
   const toggleHelp = useCallback(() => setHelp((h) => !h), []);
   useReviewKeys(snapshot, active && !help, toggleHelp);
-  const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['conversations'] : [])];
+  const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['side'] : [])];
   const layout = useDefaultLayout({ id: `files-${snapshot.role}`, panelIds });
   return (
     <>
@@ -431,8 +434,8 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
       {ui.showPanel && (
         <>
           <Separator className={SEPARATOR} />
-          <Panel id="conversations" defaultSize="22" minSize={240} maxSize="40">
-            <ConversationsPanel snapshot={snapshot} />
+          <Panel id="side" defaultSize="26" minSize={280} maxSize="45">
+            <SidePanel snapshot={snapshot} />
           </Panel>
         </>
       )}

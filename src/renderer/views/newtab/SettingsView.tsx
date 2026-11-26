@@ -14,6 +14,7 @@ import { applyAppSettings, useAppSettings, useDiffAppearance } from '../../state
 import { showSetup } from '../../state/setup';
 import { checkForUpdate, useUpdates } from '../../state/updates';
 import { QuickActionsSettings } from './QuickActionsSettings';
+import { AgentsSettings } from './AgentsSettings';
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -532,6 +533,13 @@ const SECTIONS: { id: SettingsSection; title: string; desc: string; icon: Octico
     desc: 'Your own commands for a pull request, like asking Claude for a review or running the tests: from the Actions button on its Overview, with ⌥⌘1–9, or from a file’s ⋯ menu.',
     icon: 'zap',
     page: () => <QuickActionsSettings />,
+  },
+  {
+    id: 'agents',
+    title: 'Claude',
+    desc: 'Claude reviewing with you: one Claude Code session per pull request, for reviews and questions about a line, which also opens in Claude Desktop and Claude Code. Its comments arrive as drafts.',
+    icon: 'comment',
+    page: () => <AgentsSettings />,
   },
   { id: 'comments', title: 'Comments', desc: 'How review comments are placed again when the code they’re on changes.', icon: 'comment-discussion', page: () => <CommentsPage /> },
   { id: 'about', title: 'About', desc: 'Version and updates, privacy, and the open-source parts inside.', icon: 'info', page: () => <AboutPage /> },

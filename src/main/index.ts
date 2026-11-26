@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,7 +24,7 @@ function applyAppTheme(id: string): void {
 if (process.env.PR_REVIEW_USER_DATA) app.setPath('userData', process.env.PR_REVIEW_USER_DATA);
 
 /** Pop-out windows show one PR; links always go to the main window. */
-const popOuts = new WeakSet<BrowserWindow>();
+const popOuts = new WeakMap<BrowserWindow, string>();
 /** PR links (prreview://) that arrived before a window's page was listening, e.g. the link that launched the app. */
 const pendingLinks: string[] = [];
 /** Pages that asked for pending links, so they are listening for new ones too. */
@@ -95,7 +95,7 @@ function createWindow(popOutKey?: string): BrowserWindow {
   });
   // Automated runs (PR_REVIEW_HIDDEN_WINDOWS) keep their windows off screen instead of popping up over yours.
   if (!process.env.PR_REVIEW_HIDDEN_WINDOWS) win.once('ready-to-show', () => win.show());
-  if (popOutKey) popOuts.add(win);
+  if (popOutKey) popOuts.set(win, popOutKey);
   const id = win.webContents.id;
   // A reload or a closed window stops listening until its page asks again.
   win.webContents.on('did-navigate', () => linkReady.delete(id));
@@ -268,7 +268,8 @@ function buildMenu(): void {
         label: 'View',
         submenu: [
           { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+B', click: send('toggle-tree') },
-          { label: 'Toggle Conversations', accelerator: 'CmdOrCtrl+Shift+C', click: send('toggle-conversations') },
+          { label: 'Toggle Comments', accelerator: 'CmdOrCtrl+Shift+C', click: send('toggle-comments') },
+          { label: 'Toggle Claude', accelerator: 'CmdOrCtrl+Shift+A', click: send('toggle-claude') },
           { label: 'Toggle Word Wrap', accelerator: 'Alt+Z', click: send('toggle-word-wrap') },
           { type: 'separator' },
           { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: send('find-in-files') },
@@ -313,7 +314,14 @@ void app.whenReady().then(async () => {
           items.map((item) =>
             item === 'separator'
               ? { type: 'separator' as const }
-              : { label: item.label, enabled: item.enabled ?? true, accelerator: item.accelerator, registerAccelerator: false, click: () => resolve(item.id) },
+              : {
+                  label: item.label,
+                  enabled: item.enabled ?? true,
+                  accelerator: item.accelerator,
+                  registerAccelerator: false,
+                  ...(item.checked !== undefined ? { type: 'checkbox' as const, checked: item.checked } : {}),
+                  click: () => resolve(item.id),
+                },
           ),
         );
         // On macOS the close callback can run before the item's click handler, so give the click a moment to win.
@@ -326,6 +334,11 @@ void app.whenReady().then(async () => {
       const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
       return response === 0;
     },
+    copyText: (text) => clipboard.writeText(text),
+    showPr: (key) => {
+      const win = BrowserWindow.getAllWindows().find((w) => popOuts.get(w) === key) ?? mainWindow();
+      if (win) bringToFront(win);
+    },
     notify: (title, body, url) => {
       // In the app, the status bar shows it.
       if (BrowserWindow.getFocusedWindow() || !Notification.isSupported()) return;
@@ -336,6 +349,8 @@ void app.whenReady().then(async () => {
   });
   applyAppTheme((await registry.appState.settings()).appTheme);
   registerIpc(registry.api());
+  // Without the server (no Keychain access…) the app still works; Settings › Claude shows that it isn't running.
+  await registry.startMcp().catch(() => undefined);
   app.setAboutPanelOptions({ applicationName: 'PR Review', applicationVersion: currentVersion() });
   buildMenu();
   updateDockMenu();
@@ -352,5 +367,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   registry?.stopActions();
+  registry?.stopMcp();
   registry?.disposeAll();
 });

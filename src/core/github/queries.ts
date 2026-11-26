@@ -682,6 +682,7 @@ export const SEARCH_PRS = /* GraphQL */ `
           reviewDecision
           author {
             login
+            avatarUrl
           }
           repository {
             name
@@ -740,7 +741,7 @@ export interface SearchNode {
   additions?: number;
   deletions?: number;
   reviewDecision?: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
-  author?: { login: string } | null;
+  author?: { login: string; avatarUrl?: string } | null;
   repository?: { name: string; owner: { login: string }; url: string };
   labels?: { nodes: { name: string; color: string }[] };
   comments?: { totalCount: number };

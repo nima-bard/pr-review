@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Draft, PrSnapshot } from '../../shared/model';
 import { api, errorText } from '../api';
-import { Avatar, Badge, Button } from '../components/ui';
+import { Avatar, Badge, Button, cx, Segmented } from '../components/ui';
+import { askPrefix } from '../../shared/agents';
+import { askClaude, useClaudeSettings } from '../state/claude';
 import { requestComposer, updateUi, usePrUi } from '../state/ui';
 import { readUnsent, unsentKey, writeUnsent, type ComposerTarget } from '../state/unsent';
+import { CommentBody } from './CommentBody';
 
 function newDraftId(): string {
   return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -59,6 +62,23 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
     if (prompt) root.current?.scrollIntoView({ block: 'nearest' });
   }, [prompt]);
   const isDraftEdit = target.draftId !== undefined;
+  const claudeOn = useClaudeSettings((s) => s.enabled);
+  // Comment, or ask Claude about these lines; typing "/ask " or "/claude " at the start switches to asking.
+  const [mode, setMode] = useState<'comment' | 'ask'>('comment');
+  const asking = mode === 'ask' && claudeOn && !isDraftEdit;
+  const onText = (text: string) => {
+    const asked = claudeOn && !isDraftEdit ? askPrefix(text) : null;
+    if (asked !== null && /^\s*\/(ask|claude)\s/i.test(text)) {
+      setMode('ask');
+      setBody(asked);
+    } else setBody(text);
+  };
+  const ask = async () => {
+    if (!body.trim()) return;
+    await askClaude(snapshot.key, { kind: 'lines', prompt: body, target: { path: target.path, side: target.side, startLine: target.startLine, endLine: target.endLine } }, false);
+    finish();
+  };
+  const send = () => void (asking ? ask() : save());
   /** Ends this editor and opens whatever was waiting (another line, or nothing). */
   const finish = () => {
     writeUnsent(storeKey, null);
@@ -77,6 +97,7 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
       headOid: snapshot.details.headRefOid,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       ...(target.startLine !== target.endLine ? { startLine: target.startLine } : {}),
+      // No `origin`: once you edit an agent's draft, it's yours (and agents can't change it any more).
     };
     try {
       await api.saveDraft(snapshot.key, draft);
@@ -88,9 +109,23 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
   const range = target.startLine === target.endLine ? `line ${target.endLine}` : `lines ${target.startLine}–${target.endLine}`;
   return (
     <div ref={root} className="max-w-[680px] rounded-[9px] bg-raised border border-accent overflow-hidden font-sans text-comment">
-      <div className="px-3 py-2 border-b border-line-2 text-muted text-[12px]">
-        New comment on {target.side === 'LEFT' ? 'old ' : ''}
-        {range}
+      <div className={cx('flex items-center gap-2 px-3 border-b border-line-2 text-muted text-[12px]', claudeOn && !isDraftEdit ? 'py-1.5' : 'py-2')}>
+        <span className="flex-1">
+          {asking ? 'Ask about' : 'New comment on'} {target.side === 'LEFT' ? 'old ' : ''}
+          {range}
+        </span>
+        {claudeOn && !isDraftEdit && (
+          <Segmented<'comment' | 'ask'>
+            label="Comment or ask"
+            size="sm"
+            value={asking ? 'ask' : 'comment'}
+            onChange={setMode}
+            options={[
+              { value: 'comment', label: 'Comment' },
+              { value: 'ask', label: 'Ask Claude' },
+            ]}
+          />
+        )}
       </div>
       <div className="p-3 flex flex-col gap-2">
         <textarea
@@ -98,15 +133,19 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
           autoFocus
           rows={4}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e) => onText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save();
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
             if (e.key === 'Escape') {
               e.stopPropagation();
               requestComposer(snapshot.key, null);
             }
           }}
-          placeholder="Leave a comment (Markdown, ```suggestion blocks supported)"
+          placeholder={
+            asking
+              ? `Ask Claude about these lines, e.g. “Does this break our guidelines? If so, write a comment here.”`
+              : `Leave a comment (Markdown, \`\`\`suggestion blocks supported)${claudeOn && !isDraftEdit ? '; start with /ask to ask instead' : ''}`
+          }
           className="resize-y px-2.5 py-2 rounded-[7px] bg-side border border-line-2 focus:border-accent outline-none"
         />
         {error && <div className="text-del text-[12px]">{error}</div>}
@@ -133,13 +172,15 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            <span className="text-[11.5px] text-muted">⌘⏎ or “{isDraftEdit ? 'Save draft' : 'Add review comment'}” puts it in your review</span>
+            <span className="text-[11.5px] text-muted">
+              {asking ? '⌘⏎ sends it to Claude; a comment it writes goes into your review here' : `⌘⏎ or “${isDraftEdit ? 'Save draft' : 'Add review comment'}” puts it in your review`}
+            </span>
             <span className="flex-1" />
             <Button size="sm" variant="ghost" onClick={finish}>
               Discard
             </Button>
-            <Button size="sm" variant="primary" disabled={!body.trim()} onClick={() => void save()}>
-              {isDraftEdit ? 'Save draft' : 'Add review comment'}
+            <Button size="sm" variant="primary" disabled={!body.trim()} onClick={send}>
+              {asking ? 'Ask Claude' : isDraftEdit ? 'Save draft' : 'Add review comment'}
             </Button>
           </div>
         )}
@@ -150,19 +191,15 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
 
 export function DraftCard({ snapshot, draft }: { snapshot: PrSnapshot; draft: Draft }) {
   const range = draft.startLine !== undefined ? `Lines ${draft.startLine}–${draft.line}` : `Line ${draft.line}`;
+  const edit = () => requestComposer(snapshot.key, { path: draft.path, side: draft.side, startLine: draft.startLine ?? draft.line, endLine: draft.line, draftId: draft.id, body: draft.body });
   return (
-    <div className="max-w-[680px] rounded-[9px] bg-raised border border-info-line overflow-hidden font-sans text-comment">
+    <div id={`draft-${draft.id}`} className="max-w-[680px] rounded-[9px] bg-raised border border-info-line overflow-hidden font-sans text-comment">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line-2">
         <span className="font-semibold whitespace-nowrap">{range}</span>
-        <Badge tone="info">Draft · not posted yet</Badge>
+        <Badge tone="info">{draft.origin ? `Draft · from ${draft.origin.agent}` : 'Draft · not posted yet'}</Badge>
         {draft.unplaceable && <Badge tone="bad">Line changed in a new push · move or delete</Badge>}
         <span className="flex-1" />
-        <Button
-          size="sm"
-          onClick={() =>
-            requestComposer(snapshot.key, { path: draft.path, side: draft.side, startLine: draft.startLine ?? draft.line, endLine: draft.line, draftId: draft.id, body: draft.body })
-          }
-        >
+        <Button size="sm" onClick={edit} title={draft.origin ? `Once you edit it, it's your comment (${draft.origin.agent} can't change it any more)` : undefined}>
           Edit
         </Button>
         <Button size="sm" onClick={() => void api.deleteDraft(snapshot.key, draft.id)}>
@@ -170,9 +207,18 @@ export function DraftCard({ snapshot, draft }: { snapshot: PrSnapshot; draft: Dr
         </Button>
       </div>
       <div className="flex gap-2.5 px-3 py-2.5">
-        <Avatar login={snapshot.viewer} url={snapshot.viewerAvatarUrl} size={26} />
-        <div className="min-w-0 flex-1 whitespace-pre-wrap text-fg">{draft.body}</div>
+        {draft.origin ? <AgentAvatar name={draft.origin.agent} /> : <Avatar login={snapshot.viewer} url={snapshot.viewerAvatarUrl} size={26} />}
+        <CommentBody snapshot={snapshot} draft={draft} />
       </div>
     </div>
+  );
+}
+
+/** The agent's initial in a circle, where your avatar would be. */
+export function AgentAvatar({ name, size = 26 }: { name: string; size?: number }) {
+  return (
+    <span aria-hidden className="grid shrink-0 place-items-center rounded-full bg-warn-bg text-warn font-bold" style={{ width: size, height: size, fontSize: size * 0.46 }}>
+      {name.slice(0, 1).toUpperCase()}
+    </span>
   );
 }

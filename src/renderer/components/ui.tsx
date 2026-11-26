@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import { useEffect, useMemo, useRef, type ButtonHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { parsePrInput } from '../../shared/prInput';
 import { appTheme } from '../../shared/themes';
@@ -174,6 +175,15 @@ export function Markdown({ html, className }: { html: string; className?: string
   );
 }
 
+/**
+ * Markdown written in the app (drafts, agent replies), rendered like GitHub's comments: GitHub-flavoured, line breaks
+ * kept, and through `Markdown`, so it's sanitized and links behave the same.
+ */
+export function MarkdownText({ text, className }: { text: string; className?: string }) {
+  const html = useMemo(() => marked.parse(text, { gfm: true, breaks: true, async: false }), [text]);
+  return <Markdown html={html} className={className} />;
+}
+
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return '';
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -216,6 +226,8 @@ const ICONS = {
   trash: 'M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5',
   sidebar: 'M2 3h12v10H2zM6 3v10',
   sliders: 'M2.5 4.5h11M2.5 11.5h11M10 3v3M6 10v3',
+  /** The return key (↵), for sending. */
+  enter: 'M13 3.5v4.5a2 2 0 0 1-2 2H3.5M6.5 7l-3 3 3 3',
 };
 
 export function Icon({ name, size = 14, className, rotate }: { name: keyof typeof ICONS; size?: number; className?: string; rotate?: number }) {

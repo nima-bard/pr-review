@@ -1,11 +1,14 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Api } from '../src/shared/ipc';
+import { appendSession } from '../test/helpers/claudeSession';
 
 const L =(...ls: string[]) => `${ls.join('\n')}\n`;
 const BASE_FILE = L('export function total(items: number[]): number {', '  let sum = 0;', '  for (const i of items) {', '    sum += i;', '  }', '  return sum;', '}');
@@ -125,6 +128,74 @@ function mockGitHub(fx: Fixture, received: { query: string; vars: Record<string,
   });
 }
 
+/**
+ * A stand-in for `claude -p --input-format stream-json`: it takes prompts on stdin one after another, writes them and its
+ * answers into the session file under CLAUDE_CONFIG_DIR (as Claude Code does, for the app to read back through the
+ * Agent SDK), adds a draft through the PR Review MCP server named in --mcp-config where a prompt says add_draft goes
+ * (for the pull request its --append-system-prompt names), and prints stream-json. It exits when stdin ends.
+ */
+const FAKE_CLAUDE = `#!/usr/bin/env node
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { createInterface } from 'node:readline';
+const args = process.argv.slice(2);
+const at = (flag) => args[args.indexOf(flag) + 1];
+const server = JSON.parse(at('--mcp-config')).mcpServers['pr-review'];
+const sid = args.includes('--session-id') ? at('--session-id') : at('--resume');
+// The app gives the rules and the pull request once, in the system prompt; the prompts carry only the request.
+const system = at('--append-system-prompt');
+const cwd = realpathSync(process.cwd());
+const folder = join(process.env.CLAUDE_CONFIG_DIR, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+const file = join(folder, sid + '.jsonl');
+mkdirSync(folder, { recursive: true });
+let parent = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8').trim().split('\\n').pop()).uuid : null;
+const record = (type, message) => {
+  const uuid = randomUUID();
+  const line = { type, uuid, parentUuid: parent, sessionId: sid, cwd, timestamp: new Date().toISOString(), isSidechain: false, userType: 'external', entrypoint: 'sdk-cli', version: '2.1.0', message };
+  appendFileSync(file, JSON.stringify(line) + '\\n');
+  parent = uuid;
+};
+const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+const headers = { ...server.headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+const call = (id, method, params) => fetch(server.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) }).then((r) => r.text());
+const toolText = (sse) => JSON.parse(sse.split('\\n').find((l) => l.startsWith('data: ')).slice(6)).result.content[0].text;
+async function answer(prompt) {
+  out({ type: 'system', subtype: 'init', session_id: sid });
+  record('user', { role: 'user', content: prompt });
+  // Asked whether the list is complete, it answers and offers a comment as buttons (offer_choices).
+  if (/Is the list complete\\?/.test(prompt)) {
+    const offer = { question: 'Leave a comment about it?', choices: [{ label: 'Yes, leave a comment', prompt: 'Yes, write that comment.' }, { label: 'No', prompt: null }] };
+    record('assistant', { role: 'assistant', content: [{ type: 'text', text: 'No: two processors are missing.' }, { type: 'tool_use', id: 't2', name: 'mcp__pr-review__offer_choices', input: offer }], stop_reason: 'tool_use' });
+    record('user', { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: 'Shown as buttons.' }] }] });
+    record('assistant', { role: 'assistant', content: [{ type: 'text', text: '' }], stop_reason: 'end_turn' });
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'offered', session_id: sid });
+    return;
+  }
+  const where = /add_draft \\(path "([^"]+)", line (\\d+)/.exec(prompt);
+  if (where) {
+    const input = { pr: /pr "([^"]+)"/.exec(system)[1], path: where[1], line: Number(where[2]), body: 'Negative items lower the total: clamp them.' };
+    record('assistant', { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'mcp__pr-review__add_draft', input }], stop_reason: 'tool_use' });
+    await call(0, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-claude', version: '1' } });
+    const text = toolText(await call(1, 'tools/call', { name: 'add_draft', arguments: input }));
+    record('user', { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text }] }] });
+  }
+  const reply = where ? 'Yes, negative items would lower the total. I added a comment.' : 'Noted.';
+  record('assistant', { role: 'assistant', content: [{ type: 'text', text: reply }], stop_reason: 'end_turn' });
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } });
+  out({ type: 'result', subtype: 'success', is_error: false, result: reply, session_id: sid });
+}
+let queue = Promise.resolve();
+createInterface({ input: process.stdin })
+  .on('line', (line) => {
+    queue = queue.then(() => answer(JSON.parse(line).message.content[0].text));
+  })
+  .on('close', () => queue.then(() => process.exit(0)));
+`;
+
+const MCP_TOKEN = 'e2e-mcp-token';
+let mcpPort = 0;
+
 let fx: Fixture;
 let server: Server;
 let app: ElectronApplication;
@@ -138,13 +209,22 @@ test.beforeAll(async () => {
   const port = (server.address() as AddressInfo).port;
   const userData = join(fx.root, 'userdata');
   mkdirSync(join(userData, 'pr-review'), { recursive: true });
+  mcpPort = 48_000 + Math.floor(Math.random() * 1000);
   writeFileSync(
     join(userData, 'pr-review', 'state.json'),
-    JSON.stringify({ settings: { scanRoots: [join(fx.root, 'source')], worktreeRoot: null, editorCommand: 'true', placeThreshold: 0.7, guessThreshold: 0.5, aiEnabled: false, aiModel: 'haiku' }, repos: [], openTabs: [], ownedWorktrees: [] }),
+    JSON.stringify({
+      settings: { scanRoots: [join(fx.root, 'source')], worktreeRoot: null, editorCommand: 'true', placeThreshold: 0.7, guessThreshold: 0.5, aiEnabled: false, aiModel: 'haiku', mcpPort, claude: { enabled: true, model: '' } },
+      repos: [],
+      openTabs: [],
+      ownedWorktrees: [],
+    }),
   );
+  const fakeClaude = join(fx.root, 'fake-claude.mjs');
+  writeFileSync(fakeClaude, FAKE_CLAUDE);
+  chmodSync(fakeClaude, 0o755);
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, PR_REVIEW_USER_DATA: userData, PR_REVIEW_API: `http://127.0.0.1:${port}`, PR_REVIEW_TOKEN: 'test-token' },
+    env: { ...process.env, PR_REVIEW_USER_DATA: userData, PR_REVIEW_API: `http://127.0.0.1:${port}`, PR_REVIEW_TOKEN: 'test-token', PR_REVIEW_MCP_TOKEN: MCP_TOKEN, PR_REVIEW_CLAUDE: fakeClaude, CLAUDE_CONFIG_DIR: join(fx.root, 'claude') },
   });
   win = await app.firstWindow();
 });
@@ -194,6 +274,162 @@ test('opens a PR into a worktree, re-anchors an outdated thread and submits a re
   expect(thread?.vars).toMatchObject({ reviewId: 'R1', path: 'src/calc.ts', line: 8, side: 'RIGHT', body: 'Discount should come from config.' });
   const submit = received.find((r) => r.query.includes('submitPullRequestReview('));
   expect(submit?.vars).toMatchObject({ reviewId: 'R1', event: 'COMMENT', body: 'Two small things.' });
+});
+
+test('an agent adds a draft over MCP: it is in your review right away and goes out when you submit', async () => {
+  const client = new Client({ name: 'e2e', version: '1' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}`, 'X-PR-Review-Agent': 'Codex' } } }),
+  );
+  const res = (await client.callTool({ name: 'add_draft', arguments: { pr: 'acme/demo#1', path: 'src/calc.ts', line: 8, body: 'Read the rate from config.' } })) as { isError?: boolean };
+  expect(res.isError).toBeFalsy();
+  const outside = (await client.callTool({ name: 'add_draft', arguments: { pr: 'acme/demo#1', path: 'src/calc.ts', line: 40, body: 'x' } })) as { isError?: boolean; content: { text: string }[] };
+  expect(outside.isError).toBe(true);
+  expect(outside.content[0]?.text).toContain('Commentable lines');
+  await client.close();
+
+  await expect(win.getByText('Draft · from Codex', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await win.getByRole('button', { name: /Submit review/ }).first().click();
+  const dialog = win.getByRole('dialog', { name: 'Submit your review' });
+  await expect(dialog).toContainText('Local draft · from Codex');
+  const before = received.length;
+  await dialog.getByRole('button', { name: /^Submit review/ }).click();
+  await expect(dialog).toBeHidden({ timeout: 20_000 });
+  const posted = received.slice(before).find((r) => r.query.includes('addPullRequestReviewThread('));
+  expect(posted?.vars).toMatchObject({ path: 'src/calc.ts', line: 8, body: 'Read the rate from config.' });
+  await expect(win.getByText('Draft · from Codex', { exact: true })).toBeHidden();
+});
+
+test('asking Claude about a line: the line gets a marker, the answer is in the side panel, its comment a draft', async () => {
+  await win.evaluate(() =>
+    (globalThis as unknown as { api: Api }).api.askClaude('github.com/acme/demo#1', {
+      kind: 'lines',
+      prompt: 'Can a negative item break this?',
+      target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 6, endLine: 6 },
+    }),
+  );
+  const marker = win.locator('[id^="ask-"]');
+  await expect(marker.getByText('Asked Claude:')).toBeVisible({ timeout: 20_000 });
+  await expect(marker.getByText('Answered', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(win.getByText('Draft · from Claude', { exact: true })).toBeVisible();
+  // The answer isn't shown in the diff, only in the side panel, where Claude takes the comments' place.
+  const answer = 'Yes, negative items would lower the total. I added a comment.';
+  const panel = win.getByRole('region', { name: 'Claude' });
+  const comments = win.getByRole('region', { name: 'Comments' });
+  await expect(comments).toBeVisible();
+  await expect(panel).toHaveCount(0);
+  await expect(win.getByText(answer)).toBeHidden();
+  await win.getByRole('button', { name: 'Show in conversation' }).click();
+  await expect(panel.getByText(answer)).toBeVisible();
+  await expect(panel.getByText('1 comment added to your review:')).toBeVisible();
+  await expect(comments).toHaveCount(0);
+
+  // Removing the marker takes it off the line, and is saved, so a refresh doesn't bring it back.
+  await win.getByRole('button', { name: /^Comments/ }).click();
+  await expect(comments).toBeVisible();
+  await win.getByRole('button', { name: 'Hide this marker' }).click();
+  await expect(win.getByText('Asked Claude:')).toHaveCount(0);
+  // Kept beside the worktree (its git folder), not as a copy of the conversation.
+  const view = await win.evaluate(() => (globalThis as unknown as { api: Api }).api.claudeView('github.com/acme/demo#1'));
+  expect(view?.hiddenMarkers).toEqual([view?.exchanges[0]?.id]);
+  expect(view?.exchanges[0]).toMatchObject({ asked: 'app', request: { kind: 'lines', prompt: 'Can a negative item break this?' }, done: true });
+
+  // A question typed in Claude Desktop into the same session shows here too: the session is the conversation.
+  const worktree = realpathSync(join(fx.root, 'source', 'demo.worktrees', 'pr-1'));
+  appendSession(join(fx.root, 'claude'), worktree, view!.sessionId!, [
+    { type: 'user', message: { role: 'user', content: 'Typed in Claude Desktop' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Seen from Desktop.' }], stop_reason: 'end_turn' } },
+  ]);
+  await expect
+    .poll(async () => (await win.evaluate(() => (globalThis as unknown as { api: Api }).api.claudeView('github.com/acme/demo#1')))?.exchanges.map((e) => [e.asked, e.reply]), { timeout: 15_000 })
+    .toEqual([
+      ['app', 'Yes, negative items would lower the total. I added a comment.'],
+      ['elsewhere', 'Seen from Desktop.'],
+    ]);
+});
+
+test('Claude offers a follow-up as buttons under its answer, and a choice sends its prompt back', async () => {
+  const key = 'github.com/acme/demo#1';
+  await win.evaluate(
+    (k) => (globalThis as unknown as { api: Api }).api.askClaude(k, { kind: 'lines', prompt: 'Is the list complete?', target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 3, endLine: 3 } }),
+    key,
+  );
+  // The Claude button shows the conversation in the side panel; the Comments button brings the comments back.
+  const claude = win.getByRole('button', { name: 'Claude', exact: true });
+  await claude.click();
+  await expect(claude).toHaveAttribute('aria-pressed', 'true');
+  const panel = win.getByRole('region', { name: 'Claude' });
+  await expect(panel.getByText('Leave a comment about it?')).toBeVisible({ timeout: 20_000 });
+  await panel.getByRole('button', { name: 'Yes, leave a comment' }).click();
+  // Answered by asking: the buttons go, and the choice's prompt is the next question, about the same lines.
+  await expect(panel.getByRole('button', { name: 'Yes, leave a comment' })).toHaveCount(0);
+  await expect
+    .poll(async () => (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.at(-1), { timeout: 15_000 })
+    .toMatchObject({ request: { kind: 'lines', prompt: 'Yes, write that comment.', target: { startLine: 3 } }, done: true });
+  // The question typed in Claude Desktop earlier is still part of the conversation: the app's Claude started again from
+  // the session as it was, rather than writing on from what it had seen.
+  const asked = (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.map((e) => e.asked);
+  expect(asked).toEqual(['app', 'elsewhere', 'app', 'app']);
+
+  // Typing in the box and pressing Enter asks too, as in Claude Desktop.
+  const box = panel.getByRole('textbox', { name: 'Ask Claude' });
+  await box.fill('Thanks');
+  await box.press('Enter');
+  await expect(panel.getByText('Noted.')).toBeVisible({ timeout: 15_000 });
+  await expect(box).toHaveValue('');
+  // The conversation's own model and effort show under the box, and going back shows Settings' default again.
+  const model = panel.getByRole('button', { name: 'Model', exact: true });
+  await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, { model: 'claude-haiku-5-5', effort: 'low' }), key);
+  await expect(model).toHaveText('Haiku 5.5');
+  await expect(panel.getByRole('button', { name: 'Effort', exact: true })).toHaveText('Low');
+  await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, null), key);
+  await expect(model).not.toHaveText('Haiku 5.5');
+  await win.getByRole('button', { name: /^Comments/ }).click();
+  await expect(win.getByRole('region', { name: 'Comments' })).toBeVisible();
+  await expect(claude).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('Ask Claude on a review thread: the thread shows over the box, can be removed, and goes with the question', async () => {
+  const key = 'github.com/acme/demo#1';
+  const card = win.locator('[id="thread-T_outdated"]');
+  await card.getByRole('button', { name: 'Ask Claude' }).click();
+  const panel = win.getByRole('region', { name: 'Claude' });
+  const box = panel.getByRole('textbox', { name: 'Ask Claude' });
+  await expect(box).toBeFocused();
+  await expect(panel.getByText('Can items be negative here?')).toBeVisible();
+  // × asks about nothing in particular; Ask Claude brings the thread back.
+  await panel.getByRole('button', { name: 'Don’t ask about this thread' }).click();
+  await expect(panel.getByText('Can items be negative here?')).toHaveCount(0);
+  await card.getByRole('button', { name: 'Ask Claude' }).click();
+  await box.fill('Is this addressed?');
+  await box.press('Enter');
+  await expect(panel.getByText('Can items be negative here?')).toHaveCount(0);
+  await expect
+    .poll(async () => (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.at(-1), { timeout: 15_000 })
+    .toMatchObject({ request: { kind: 'thread', prompt: 'Is this addressed?', thread: { id: 'T_outdated', path: 'src/calc.ts' } }, done: true });
+  await expect(panel.getByRole('button', { name: /Thread on calc\.ts/ })).toBeVisible();
+  await win.getByRole('button', { name: /^Comments/ }).click();
+});
+
+test('an agent acts in the app over MCP: marks a file viewed, shows a thread and opens a search', async () => {
+  const client = new Client({ name: 'e2e', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${mcpPort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } } }));
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const res = (await client.callTool({ name, arguments: { pr: 'acme/demo#1', ...args } })) as { isError?: boolean; content: { text: string }[] };
+    expect(res.isError, res.content[0]?.text).toBeFalsy();
+  };
+
+  await call('set_viewed', { paths: ['src/calc.ts'] });
+  await expect(win.getByRole('checkbox', { name: 'Mark src/calc.ts as viewed' })).toBeChecked({ timeout: 20_000 });
+  expect(received.find((r) => r.query.includes('markFileAsViewed('))?.vars).toMatchObject({ prId: 'PR_1', path: 'src/calc.ts' });
+
+  await win.getByRole('button', { name: /^Overview/ }).click();
+  await call('show_in_app', { thread_id: 'T_outdated' });
+  await expect(win.locator('[id="thread-T_outdated"]')).toBeInViewport({ timeout: 20_000 });
+
+  await call('search_code', { query: 'loyalty', show: true });
+  await expect(win.getByRole('textbox', { name: 'Search', exact: true })).toHaveValue('loyalty');
+  await client.close();
 });
 
 test('a window reopened from the Dock shows the pull request that was open', async () => {

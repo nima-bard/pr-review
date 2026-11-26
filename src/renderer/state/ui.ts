@@ -8,6 +8,9 @@ export type ContentTab = { id: 'changes'; kind: 'changes' } | { id: string; kind
 
 export type { ComposerTarget } from './unsent';
 
+/** What the Files view's side panel shows: the review comments, or the conversation with Claude. */
+export type SidePanelTab = 'comments' | 'claude';
+
 /** Which version of a diff ⌘F searches: the old one (deleted and unchanged lines), the new one (added and unchanged), or both. */
 export type FindSide = 'both' | 'old' | 'new';
 
@@ -16,7 +19,9 @@ export interface PrUi {
   tree: 'changed' | 'all';
   layout: 'split' | 'unified';
   showTree: boolean;
+  /** The Files view's side panel, on `panelTab`. */
   showPanel: boolean;
+  panelTab: SidePanelTab;
   scope: 'pr' | 'file';
   filter: 'open' | 'mine' | 'reply' | 'outdated' | 'resolved' | 'all';
   contentTabs: ContentTab[];
@@ -26,6 +31,8 @@ export interface PrUi {
   composerPrompt: { next: ComposerTarget | null } | null;
   focusPath: string | null;
   focusThread: string | null;
+  /** Another element on a line to bring into view (a draft `draft-<id>`, an ask's marker `ask-<turn id>`). */
+  focusElement: string | null;
   /** Bumped by every jump, so selecting the same file again scrolls back to it. */
   focusSeq: number;
   collapsed: Record<string, boolean>;
@@ -35,6 +42,10 @@ export interface PrUi {
   showMerge: boolean;
   /** The output of background quick actions. */
   showRuns: boolean;
+  /** A review thread the next question to Claude is about (shown over its box); `seq` focuses the box again. */
+  claudeRef: { threadId: string; seq: number } | null;
+  /** A question the Claude conversation should scroll to and highlight; `seq` repeats a jump to the same one. */
+  focusAsk: { id: string; seq: number } | null;
   showVersions: boolean;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
@@ -61,6 +72,7 @@ const DEFAULT_UI: PrUi = {
   layout: 'split',
   showTree: true,
   showPanel: true,
+  panelTab: 'comments',
   scope: 'pr',
   filter: 'open',
   contentTabs: [{ id: 'changes', kind: 'changes' }],
@@ -69,12 +81,15 @@ const DEFAULT_UI: PrUi = {
   composerPrompt: null,
   focusPath: null,
   focusThread: null,
+  focusElement: null,
   focusSeq: 0,
   collapsed: {},
   openComments: {},
   showSubmit: false,
   showMerge: false,
   showRuns: false,
+  claudeRef: null,
+  focusAsk: null,
   pendingCompare: null,
   sidebar: 'files',
   search: { pattern: '', matchCase: false, wholeWord: false, regex: false, include: '', exclude: '', scope: 'changed' },
@@ -99,6 +114,35 @@ export function usePrUi(key: string): PrUi {
 
 export function getPrUi(key: string): PrUi {
   return useUiStore.getState().byKey[key] ?? DEFAULT_UI;
+}
+
+/** Shows the side panel on `tab`, in the Files view. */
+export function showSidePanel(key: string, tab: SidePanelTab): void {
+  updateUi(key, { view: 'files', showPanel: true, panelTab: tab });
+}
+
+/** The Comments and Claude buttons (⇧⌘C, ⇧⌘A): show the side panel on `tab`, or close it when it already shows `tab`. */
+export function toggleSidePanel(key: string, tab: SidePanelTab): void {
+  const ui = getPrUi(key);
+  if (sidePanelShows(ui, tab)) updateUi(key, { showPanel: false });
+  else showSidePanel(key, tab);
+}
+
+/** Whether the side panel is on screen showing `tab`. */
+export function sidePanelShows(ui: PrUi, tab: SidePanelTab): boolean {
+  return ui.view === 'files' && ui.showPanel && ui.panelTab === tab;
+}
+
+/** "Ask Claude" on a review thread: the conversation, with the thread over its box for the next question. */
+export function askAboutThread(key: string, threadId: string): void {
+  showSidePanel(key, 'claude');
+  updateUi(key, (ui) => ({ claudeRef: { threadId, seq: (ui.claudeRef?.seq ?? 0) + 1 } }));
+}
+
+/** Shows question `id` in the Claude conversation (from a line's marker). */
+export function showAsk(key: string, id: string): void {
+  showSidePanel(key, 'claude');
+  updateUi(key, (ui) => ({ focusAsk: { id, seq: (ui.focusAsk?.seq ?? 0) + 1 } }));
 }
 
 export function updateUi(key: string, patch: Partial<PrUi> | ((ui: PrUi) => Partial<PrUi>)): void {
@@ -185,8 +229,8 @@ export function requestComposer(key: string, next: ComposerTarget | null): void 
   updateUi(key, { composer: next, composerPrompt: null });
 }
 
-export function focusFile(key: string, path: string, threadId: string | null = null): void {
-  updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusSeq: ui.focusSeq + 1, view: 'files' }));
+export function focusFile(key: string, path: string, threadId: string | null = null, elementId: string | null = null): void {
+  updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusElement: elementId, focusSeq: ui.focusSeq + 1, view: 'files' }));
 }
 
 export interface ViewPrefs {

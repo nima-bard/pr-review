@@ -1,5 +1,10 @@
 import type {
   ActionRun,
+  AgentRequest,
+  ClaudeApp,
+  ClaudeModelChoice,
+  ClaudeModels,
+  ClaudeView,
   AuthStatus,
   BrowserExtensionInfo,
   CodeSearchQuery,
@@ -11,6 +16,7 @@ import type {
   FileContent,
   FileDiffModel,
   InboxSection,
+  McpStatus,
   MergeInfo,
   MergeInput,
   OpenPrResult,
@@ -48,6 +54,8 @@ export interface Api {
   setViewed(key: string, paths: string[], viewed: boolean): Promise<void>;
   saveDraft(key: string, draft: Draft): Promise<void>;
   deleteDraft(key: string, draftId: string): Promise<void>;
+  /** Deletes several drafts. */
+  deleteDrafts(key: string, ids: string[]): Promise<void>;
   reply(key: string, threadId: string, body: string): Promise<void>;
   setResolved(key: string, threadId: string, resolved: boolean): Promise<void>;
   react(key: string, subjectId: string, content: ReactionContent, add: boolean): Promise<void>;
@@ -124,6 +132,36 @@ export interface Api {
   openExtensionsPage(page: string): Promise<boolean>;
   /** Shows the Chrome extension's folder in Finder. */
   revealBrowserExtension(): Promise<void>;
+  /** Asks Claude in the PR's session; it waits while Claude Desktop answers there or Claude Code has the session. */
+  askClaude(key: string, request: AgentRequest): Promise<void>;
+  /** Drops a question that hasn't reached the session yet. */
+  cancelClaudeRequest(key: string, pendingId: string): Promise<void>;
+  /** Sends a question that couldn't be sent again. */
+  retryClaudeRequest(key: string, pendingId: string): Promise<void>;
+  /** Ends the answer Claude is giving to a question from the app. */
+  stopClaude(key: string): Promise<void>;
+  /** OK on "close Claude Code there and send": takes the session from an idle Claude Code in a terminal, then sends. */
+  takeClaudeSession(key: string): Promise<void>;
+  /** The PR's Claude session as its conversation shows it (read from the session); null while Claude is off. */
+  claudeView(key: string): Promise<ClaudeView | null>;
+  /** Opens the PR's session in Claude Desktop or Claude Code (a terminal); the same session every time. */
+  openClaudeIn(key: string, app: ClaudeApp): Promise<void>;
+  /** Removes a line question's marker from the diff for good; the question stays in the session. */
+  hideAskMarker(key: string, exchangeId: string): Promise<void>;
+  /** Declines the choices Claude offered after an exchange (a choice that sends nothing, like "No"). */
+  dismissClaudeOffer(key: string, exchangeId: string): Promise<void>;
+  /** The model and effort for the PR's conversation from its next question; null goes back to Settings › Claude's. */
+  chooseClaudeModel(key: string, choice: ClaudeModelChoice | null): Promise<void>;
+  /** The models (and their effort levels) Settings › Claude offers: Claude Code's own list when it can be read. */
+  claudeModels(): Promise<ClaudeModels>;
+  /** The PR Review MCP server: whether it runs, its URL, and whether Claude Code has it registered. */
+  mcpStatus(): Promise<McpStatus>;
+  /** Registers the MCP server with Claude Code (user scope), after asking; Desktop's Code tab then sees it too. */
+  connectClaudeCode(): Promise<void>;
+  /** Copies the MCP settings for another client (URL and token, as JSON) to the clipboard; the token never reaches a page. */
+  copyMcpClientConfig(): Promise<void>;
+  /** A new token; clients registered with the old one must be connected again. */
+  resetMcpToken(): Promise<void>;
   authStatus(): Promise<AuthStatus>;
   deviceLogin(): Promise<{ userCode: string; verificationUri: string }>;
   signOutDevice(): Promise<void>;
@@ -145,10 +183,13 @@ export interface DockTab {
   active: boolean;
 }
 
-/** `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). */
-export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string } | 'separator';
+/**
+ * `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). `checked`: the item shows a check
+ * mark when true (a setting that is on, or the chosen one of a group); leave it out for plain actions.
+ */
+export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string; checked?: boolean } | 'separator';
 
-export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
+export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-comments' | 'toggle-claude' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 
 export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks' | 'reportTabs' | 'onActivateTab'>;
 
@@ -166,6 +207,7 @@ export const API_METHODS = [
   'setViewed',
   'saveDraft',
   'deleteDraft',
+  'deleteDrafts',
   'reply',
   'setResolved',
   'react',
@@ -216,6 +258,21 @@ export const API_METHODS = [
   'checkForUpdate',
   'setupInfo',
   'pickFolder',
+  'askClaude',
+  'cancelClaudeRequest',
+  'retryClaudeRequest',
+  'stopClaude',
+  'takeClaudeSession',
+  'claudeView',
+  'openClaudeIn',
+  'hideAskMarker',
+  'dismissClaudeOffer',
+  'chooseClaudeModel',
+  'claudeModels',
+  'mcpStatus',
+  'connectClaudeCode',
+  'copyMcpClientConfig',
+  'resetMcpToken',
   'authStatus',
   'deviceLogin',
   'signOutDevice',

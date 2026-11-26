@@ -113,6 +113,15 @@ export interface FileContent {
   missing: boolean;
 }
 
+/**
+ * Who wrote a draft when an agent did (through the PR Review MCP server). It is part of your review like your own and
+ * goes out with Submit; once you edit it, it is yours and loses its origin.
+ */
+export interface DraftOrigin {
+  /** The MCP client's name, e.g. "Claude" or "Claude Code". */
+  agent: string;
+}
+
 export interface Draft {
   id: string;
   path: string;
@@ -125,6 +134,8 @@ export interface Draft {
   createdAt: string;
   postedThreadId?: string;
   unplaceable?: boolean;
+  /** Set for drafts an agent added; absent for your own. */
+  origin?: DraftOrigin;
 }
 
 export interface Version {
@@ -447,7 +458,20 @@ export type PrEvent =
   /** A background quick action started, printed something or finished. */
   | { type: 'action'; key: string; run: ActionRun }
   /** The session ended because its worktree was removed: every window closes the PR's tabs. */
-  | { type: 'closed'; key: string };
+  | { type: 'closed'; key: string }
+  /** The PR's agent conversation changed (a turn started, streamed, ended). */
+  | { type: 'claude'; key: string; view: ClaudeView }
+  /** An agent asked to show the user something in the PR's tab (the show_in_app and search_code MCP tools). */
+  | { type: 'reveal'; key: string; target: RevealTarget };
+
+/** What an agent can bring into view in a PR's tab. */
+export type RevealTarget =
+  /** A file: its diff in All changes, or its own tab at `line` (of the PR head) when given. */
+  | { kind: 'file'; path: string; line: number | null; changed: boolean }
+  | { kind: 'thread'; path: string; threadId: string }
+  | { kind: 'draft'; path: string; draftId: string }
+  /** Find in files, with this search. */
+  | { kind: 'search'; query: CodeSearchQuery };
 
 export interface SubmitInput {
   event: ReviewEvent;
@@ -459,6 +483,7 @@ export interface SearchItem {
   ref: PrRef;
   title: string;
   author: string;
+  authorAvatarUrl: string | null;
   isDraft: boolean;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   createdAt: string;
@@ -545,6 +570,135 @@ export interface Settings {
   quickActions: QuickAction[];
   /** The terminal app quick actions open in, an id from TERMINALS; empty picks the first one installed. */
   terminalApp: string;
+  /** The MCP server's port on 127.0.0.1 (fixed, so registered clients keep working across restarts). */
+  mcpPort: number;
+  /** Claude in the app (see `ClaudeSettings`). */
+  claude: ClaudeSettings;
+}
+
+/** Settings › Claude. */
+export interface ClaudeSettings {
+  /** Ask Claude about pull requests in the app: each pull request gets one Claude Code session. */
+  enabled: boolean;
+  /** A model alias or id for the app's requests; empty uses Claude Code's default. */
+  model: string;
+  /** How hard Claude thinks for the app's requests; empty uses the model's default. */
+  effort: ClaudeEffort | '';
+}
+
+/** A model and effort to run Claude with (empty: Claude Code's default model, the model's default effort). */
+export type ClaudeModelChoice = Pick<ClaudeSettings, 'model' | 'effort'>;
+
+/** Claude Code's effort levels (`--effort`). */
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** A model Claude Code offers, as Settings › Claude lists it. */
+export interface ClaudeModel {
+  /** What `--model` takes: an alias ("opus") or a model id. */
+  value: string;
+  name: string;
+  description: string;
+  /** The effort levels it supports; empty when it has none. */
+  efforts: ClaudeEffort[];
+}
+
+/** The models to choose from: Claude Code's own list, or a standard one when it couldn't be read. */
+export interface ClaudeModels {
+  models: ClaudeModel[];
+  fromClaudeCode: boolean;
+}
+
+/** The Claude apps a pull request's session also opens in, besides PR Review. */
+export type ClaudeApp = 'desktop' | 'terminal';
+
+/** Lines of a changed file, as a question about them names them. */
+export interface LineTarget {
+  path: string;
+  side: DiffSide;
+  startLine: number;
+  endLine: number;
+}
+
+/** A question for Claude about the pull request: free text, about some lines, or about a review thread. */
+export interface AgentRequest {
+  kind: 'prompt' | 'lines' | 'thread';
+  /** What you typed. */
+  prompt: string;
+  /** The lines asked about: where "+" was clicked, or a thread's lines (none for a file comment). */
+  target: LineTarget | null;
+  /** `thread` only: the review thread asked about, and its file. */
+  thread?: { id: string; path: string };
+}
+
+/** One question in the pull request's Claude session and Claude's answer, as read from the session. */
+export interface Exchange {
+  /** The prompt's id in the session. */
+  id: string;
+  /** Asked in PR Review (its prompts carry a header), or in Claude Desktop or Claude Code. */
+  asked: 'app' | 'elsewhere';
+  request: AgentRequest;
+  /** When it was asked. */
+  at: string | null;
+  /** When Claude last wrote to it: with `at`, how long it worked. */
+  endedAt: string | null;
+  /** Claude's answer so far. */
+  reply: string;
+  /** What Claude did worth showing, e.g. "Added a draft on src/a.ts:42". */
+  activity: string[];
+  /** Drafts Claude added while answering. */
+  draftIds: string[];
+  /** Follow-up choices Claude offered at the end of its answer, shown as buttons (the `offer_choices` tool). */
+  offer: ClaudeOffer | null;
+  /** Claude's turn ended. */
+  done: boolean;
+}
+
+/** Choices Claude offers after an answer: a short question, and buttons that send their prompt back to it. */
+export interface ClaudeOffer {
+  question: string;
+  choices: { label: string; prompt: string | null }[];
+}
+
+/** A question on its way to the session. */
+export interface PendingRequest {
+  id: string;
+  request: AgentRequest;
+  /** waiting: for the session to be free; sent: Claude hasn't read it yet; failed: it couldn't be sent (`error`). */
+  state: 'waiting' | 'sent' | 'failed';
+  error: string | null;
+}
+
+/** What the Claude conversation shows for a pull request: its Claude session as read, and the questions on their way. */
+export interface ClaudeView {
+  /** Null until the first question. */
+  sessionId: string | null;
+  exchanges: Exchange[];
+  pending: PendingRequest[];
+  /** Who is answering in the session now: the app, Claude Desktop or Claude Code. */
+  busy: 'app' | ClaudeApp | null;
+  /** Questions wait because Claude Desktop is answering or Claude Code has the session open. */
+  waitingFor: ClaudeApp | null;
+  /** Line questions whose marker you removed from the diff. */
+  hiddenMarkers: string[];
+  /** Exchanges whose offered choices you declined (a choice without a prompt, like "No"). */
+  dismissedOffers: string[];
+  /** The model and effort chosen in this conversation, or null for Settings › Claude's default. */
+  modelChoice: ClaudeModelChoice | null;
+  /** How full the session's context is: tokens in it, of the model's window. Null before Claude has answered. */
+  context: { tokens: number; window: number } | null;
+  /** Why the last attempt to reach Claude failed, until the next one. */
+  error: string | null;
+}
+
+/** The PR Review MCP server, for Settings › Claude. */
+export interface McpStatus {
+  running: boolean;
+  url: string;
+  error: string | null;
+  /** Whether the `claude` CLI is on the PATH (Claude Code, which Claude Desktop's Code tab shares MCP servers with). */
+  claudeInstalled: boolean;
+  /** Whether `claude mcp get pr-review` finds it registered (user scope). */
+  claudeCodeRegistered: boolean;
 }
 
 /**

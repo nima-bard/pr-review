@@ -3,12 +3,14 @@ import type { CommentView, PrSnapshot, ThreadView } from '../../shared/model';
 import type { ContextMenuItem } from '../../shared/ipc';
 import { tierLabel, tierTone } from '../../shared/labels';
 import { isClaudeGenerated } from '../../shared/triage';
+import { markdownPreview } from '../../shared/markdownPreview';
 import { parseHunkSide } from '../../core/anchor/fuzzy';
 import { api, errorText } from '../api';
 import { Octicon } from '../components/octicons';
 import { Reactions } from '../components/Reactions';
 import { Avatar, Badge, Button, cx, Icon, Markdown, timeAgo } from '../components/ui';
-import { focusFile } from '../state/ui';
+import { useClaudeSettings } from '../state/claude';
+import { askAboutThread, focusFile } from '../state/ui';
 import { CommentEditor } from './CommentEditor';
 import { loadFile } from './useFileDiff';
 
@@ -223,6 +225,14 @@ export function ThreadCard({
   const replyBox = useRef<HTMLTextAreaElement>(null);
   const key = snapshot.key;
   const panel = variant === 'panel';
+  const claudeOn = useClaudeSettings((s) => s.enabled);
+  // Ask Claude about this thread: the conversation opens with the thread over its box.
+  const askClaude = claudeOn && (
+    <Button size="sm" variant="ghost" title="Ask Claude about this conversation" onClick={() => askAboutThread(key, thread.id)} className="ml-auto flex-none text-link! hover:text-link!">
+      <Icon name="comment" size={13} />
+      Ask Claude
+    </Button>
+  );
   const first = thread.comments[0];
   const tone = tierTone(thread.anchor);
   const showTier = thread.isOutdated && !thread.fileLevel;
@@ -307,8 +317,11 @@ export function ThreadCard({
               )}
               <span className="truncate text-strong shrink-0 max-w-full">{thread.anchor.path.slice(dir.length)}</span>
             </span>
-            <span className="text-muted text-[12px] whitespace-nowrap flex-none">{threadLocation(thread)}</span>
+            <span className="text-link text-[12px] whitespace-nowrap flex-none">{threadLocation(thread)}</span>
           </button>
+          <IconButton label={`Go to ${thread.anchor.path}${thread.anchor.line !== undefined ? `:${thread.anchor.line}` : ''}`} onClick={() => focusFile(key, thread.anchor.path, thread.id)}>
+            <Icon name="external" size={13} />
+          </IconButton>
           {thread.isResolved ? (
             <span title="Resolved" className="grid place-items-center w-7 h-7 text-add flex-none">
               <Octicon name="check-circle" size={15} label="Resolved" />
@@ -336,7 +349,7 @@ export function ThreadCard({
             {thread.comments.some((c) => c.pending) && <Badge tone="info">Pending</Badge>}
             {!expanded && first && (
               <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">
-                <span className="text-fg font-semibold">{first.author}</span> {first.body.split('\n')[0]}
+                <span className="text-fg font-semibold">{first.author}</span> {markdownPreview(first.body)}
               </span>
             )}
           </div>
@@ -424,6 +437,7 @@ export function ThreadCard({
                     Resolve
                   </Button>
                 )}
+                {!thread.isResolved && !reply.trim() && askClaude}
               </div>
               {reply.trim() && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -460,8 +474,10 @@ export function ThreadCard({
                   'This conversation was marked as resolved'
                 )}
               </span>
+              {askClaude}
             </div>
           )}
+          {!thread.isResolved && !thread.viewerCanReply && askClaude && <div className="flex px-3 py-2 border-t border-line">{askClaude}</div>}
           {error && <div className="px-3 py-2 text-del text-[12px]">{error}</div>}
         </>
       )}

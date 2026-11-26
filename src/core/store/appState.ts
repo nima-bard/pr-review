@@ -23,6 +23,9 @@ export const DEFAULT_SETTINGS: Settings = {
   codeFont: 'JetBrains Mono',
   quickActions: [],
   terminalApp: '',
+  mcpPort: 47823,
+  // Claude is optional: Settings › Claude turns it on.
+  claude: { enabled: false, model: '', effort: '' },
 };
 
 export interface ManualPlacement {
@@ -50,9 +53,14 @@ export class AppState {
   private async load(): Promise<AppStateFile> {
     if (!this.state) {
       const raw = await readJson<Partial<AppStateFile>>(this.file, {});
+      // Settings from before Claude was the app's only agent listed agents; a Claude agent carries over, on, with its model.
+      const { agents, agentParallel: _parallel, ...stored } = (raw.settings ?? {}) as Partial<Settings> & { agents?: { kind?: string; model?: string }[]; agentParallel?: unknown };
+      const oldClaude = agents?.find((a) => a.kind === 'claude-code' || a.kind === 'claude-terminal');
+      // Settings saved before the first-run setup existed come from an install that's already set up.
+      const settings = { ...DEFAULT_SETTINGS, ...(raw.settings ? { setupDone: true } : {}), ...stored };
+      settings.claude = { ...DEFAULT_SETTINGS.claude, ...(oldClaude ? { enabled: true, model: oldClaude.model ?? '' } : {}), ...stored.claude };
       this.state = {
-        // Settings saved before the first-run setup existed come from an install that's already set up.
-        settings: { ...DEFAULT_SETTINGS, ...(raw.settings ? { setupDone: true } : {}), ...raw.settings },
+        settings,
         repos: raw.repos ?? [],
         openTabs: raw.openTabs ?? [],
         ownedWorktrees: raw.ownedWorktrees ?? [],
