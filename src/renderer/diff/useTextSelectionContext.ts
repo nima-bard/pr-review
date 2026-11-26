@@ -1,5 +1,5 @@
 import { useEffect, type RefObject } from 'react';
-import type { DiffSide, LineTarget } from '../../shared/model';
+import type { DiffSide, LineTarget, TextSelection } from '../../shared/model';
 import { clearSelectedThread, clearTextSelection, setViewContext } from '../state/viewContext';
 
 type SelectableRoot = ShadowRoot & { getSelection?(): Selection | null };
@@ -26,6 +26,23 @@ export function selectedLines(range: Range, shadow: ParentNode, path: string): L
   return { path, side, startLine: Math.min(...numbers), endLine: Math.max(...numbers) };
 }
 
+/**
+ * What a selection within one line says and the columns it spans (from 1), leaving out whitespace at its ends; null when
+ * it spans lines, says nothing, or is most of a line anyway (longer than MAX_SELECTION).
+ */
+export function selectionOnLine(range: Range): TextSelection | null {
+  const line = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)?.closest('[data-line]');
+  if (!line || !line.contains(range.endContainer)) return null;
+  const raw = range.toString();
+  const text = raw.trim();
+  if (!text || text.length > MAX_SELECTION) return null;
+  const before = document.createRange();
+  before.setStart(line, 0);
+  before.setEnd(range.startContainer, range.startOffset);
+  const from = before.toString().length + (raw.length - raw.trimStart().length) + 1;
+  return { text, from, to: from + text.length - 1 };
+}
+
 /** The element `node` is in, seen from the page: a node in one of Pierre's shadow roots counts as being in its host. */
 function lightElement(node: EventTarget | null): Element | null {
   let el: Element | null = node instanceof Element ? node : node instanceof Node ? node.parentElement : null;
@@ -38,6 +55,9 @@ function lightElement(node: EventTarget | null): Element | null {
 }
 
 type Selected = { range: Range; shadow: ShadowRoot; path: string };
+
+/** Longer than this, a selection on one line is most of it: the line is what's asked about. */
+const MAX_SELECTION = 200;
 
 /** The text selected in one of the diffs under `root`, if any. */
 function selectionIn(root: HTMLElement): Selected | null {
@@ -79,7 +99,10 @@ export function useTextSelectionContext(key: string, root: RefObject<HTMLElement
       const now = selectionIn(el);
       if (!now || sameRange(now.range, before)) return;
       const target = selectedLines(now.range, now.shadow, now.path);
-      if (target) setViewContext(key, { kind: 'lines', target, from: 'text' });
+      if (!target) return;
+      // Within one line, what you picked on it (a word, a name) and where; across lines, the lines say it all.
+      const selection = target.startLine === target.endLine ? selectionOnLine(now.range) : null;
+      setViewContext(key, { kind: 'lines', target, from: 'text', ...(selection ? { selection } : {}) });
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(read);

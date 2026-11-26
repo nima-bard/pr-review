@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { asks as allAsks, CLAUDE_APPS, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
+import { asks as allAsks, CLAUDE_APPS, columns, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
 import type { ContextMenuItem } from '../../../shared/ipc';
-import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, LineTarget, PendingRequest, PrSnapshot, ThreadView } from '../../../shared/model';
+import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, LineTarget, PendingRequest, PrSnapshot, TextSelection, ThreadView } from '../../../shared/model';
 import { markdownPreview } from '../../../shared/markdownPreview';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Spinner } from '../../components/ui';
@@ -341,14 +341,16 @@ function Reference({ title, icon, onRemove, removeLabel, children }: { title: st
 /** The thread your next question is about: where it is and how it starts. */
 function ThreadReference({ snapshot, thread, onRemove }: { snapshot: PrSnapshot; thread: ThreadView; onRemove(): void }) {
   const t = threadTarget(thread);
-  const where = `${thread.anchor.path.split('/').at(-1)}${t ? `:${t.startLine === t.endLine ? t.endLine : `${t.startLine}–${t.endLine}`}` : ''}`;
   const first = thread.comments[0];
   return (
     <Reference title="Your next question is about this conversation" icon={<Icon name="comment" size={12} />} onRemove={onRemove} removeLabel="Don’t ask about this thread">
-      <button type="button" title={`Go to the thread on ${thread.anchor.path}`} onClick={() => focusFile(snapshot.key, thread.anchor.path, thread.id)} className="font-mono text-link hover:underline cursor-pointer flex-none">
-        {where}
-      </button>
-      <span className="min-w-0 truncate text-muted">
+      <Where
+        path={thread.anchor.path}
+        at={t ? `:${t.startLine === t.endLine ? t.endLine : `${t.startLine}–${t.endLine}`}` : ''}
+        title={`Go to the thread on ${thread.anchor.path}`}
+        onClick={() => focusFile(snapshot.key, thread.anchor.path, thread.id)}
+      />
+      <span className="min-w-0 shrink-[2] truncate text-muted">
         {first && (
           <>
             <span className="text-soft font-semibold">{first.author}</span> {markdownPreview(first.body)}
@@ -359,15 +361,32 @@ function ThreadReference({ snapshot, thread, onRemove }: { snapshot: PrSnapshot;
   );
 }
 
-/** The lines your next question is about: selected in a diff, by their numbers or as text. */
-function LinesReference({ snapshot, target, onRemove }: { snapshot: PrSnapshot; target: LineTarget; onRemove(): void }) {
-  const lines = target.startLine === target.endLine ? String(target.startLine) : `${target.startLine}–${target.endLine}`;
+/**
+ * Where a chip's question is about, as a link: the file's name gives way when space is short, the lines (and columns)
+ * never do, so you always see what the context lies on.
+ */
+function Where({ path, at, title, onClick }: { path: string; at: string; title: string; onClick(): void }) {
   return (
-    <Reference title="Your next question is about these lines, with the code and the comments on them" icon={<Icon name="file" size={12} />} onRemove={onRemove} removeLabel="Don’t ask about these lines">
-      <button type="button" title={`Go to ${target.path}`} onClick={() => focusFile(snapshot.key, target.path)} className="font-mono text-link hover:underline cursor-pointer min-w-0 truncate">
-        {target.path.split('/').at(-1)}:{lines}
-      </button>
-      <span className="text-muted flex-none">{target.side === 'LEFT' ? 'selected, old version' : 'selected'}</span>
+    <button type="button" title={title} onClick={onClick} className="flex min-w-[4ch] font-mono text-link hover:underline cursor-pointer">
+      <span className="truncate">{path.split('/').at(-1)}</span>
+      <span className="flex-none">{at}</span>
+    </button>
+  );
+}
+
+/** The lines your next question is about: selected in a diff, by their numbers or as text (and what on the line, if part of it). */
+function LinesReference({ snapshot, target, selection, onRemove }: { snapshot: PrSnapshot; target: LineTarget; selection?: TextSelection; onRemove(): void }) {
+  const lines = target.startLine === target.endLine ? String(target.startLine) : `${target.startLine}–${target.endLine}`;
+  const old = target.side === 'LEFT' ? ' (old)' : '';
+  return (
+    <Reference
+      title={selection ? `Your next question is about “${selection.text}” on line ${lines}${old}, columns ${columns(selection)}, with its code and the comments on it` : `Your next question is about line${lines.includes('–') ? 's' : ''} ${lines}${old}, with the code and the comments on them`}
+      icon={<Icon name="file" size={12} />}
+      onRemove={onRemove}
+      removeLabel="Don’t ask about these lines"
+    >
+      <Where path={target.path} at={`:${lines}${selection ? `:${columns(selection)}` : ''}${old}`} title={`Go to ${target.path}`} onClick={() => focusFile(snapshot.key, target.path)} />
+      {selection && <code className="min-w-0 shrink-[2] truncate font-mono text-fg px-1 rounded bg-hover">{selection.text}</code>}
     </Reference>
   );
 }
@@ -455,13 +474,29 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
   const input = useRef<HTMLTextAreaElement>(null);
   const last = view?.exchanges.at(-1);
   // The box grows with what you type, like Claude Desktop's (up to its max height, then it scrolls). It's measured only
-  // on screen: hidden behind the comments it measures 0, and would stay a line short.
-  useLayoutEffect(() => {
+  // with a width: hidden behind the comments it measures 0. And again whenever its width changes: measured while the
+  // panel was still opening (narrow), the placeholder wrapped over many lines and the box stayed at its max height.
+  const fit = () => {
     const el = input.current;
-    if (!el || !shown) return;
+    if (!el || !shown || el.clientWidth === 0) return;
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
-  }, [text, shown]);
+  };
+  useLayoutEffect(fit, [text, shown]);
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fitRef.current();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   // Follow the conversation as it grows, like a chat, and show the latest when the tab comes back.
   useLayoutEffect(() => {
     const el = list.current;
@@ -475,6 +510,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
   const threadId = claudeRef?.threadId ?? (context?.kind === 'thread' ? context.threadId : null);
   const refThread = threadId ? snapshot.threads.find((t) => t.id === threadId) : undefined;
   const refLines = !claudeRef && context?.kind === 'lines' ? context.target : undefined;
+  const refSelection = refLines && context?.kind === 'lines' ? context.selection : undefined;
   // Otherwise the file open in the tab you're on (× ignores it until you go to another tab).
   const activeTab = ui.contentTabs.find((t) => t.id === ui.activeContent);
   const openFile = ui.view === 'files' && activeTab?.kind === 'file' ? activeTab.path : null;
@@ -503,7 +539,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
     const request: AgentRequest = refThread
       ? { kind: 'thread', prompt: text, target: threadTarget(refThread), thread: { id: refThread.id, path: refThread.anchor.path } }
       : refLines
-        ? { kind: 'lines', prompt: text, target: refLines }
+        ? { kind: 'lines', prompt: text, target: refLines, ...(refSelection ? { selection: refSelection } : {}) }
         : refFile
           ? { kind: 'file', prompt: text, target: null, file: { path: refFile } }
           : { kind: 'prompt', prompt: text, target: null };
@@ -557,7 +593,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
               e.preventDefault();
               void send();
             }}
-            placeholder={refThread ? 'Ask Claude about this conversation…' : refLines ? 'Ask Claude about these lines…' : refFile ? 'Ask Claude about this file…' : 'Ask Claude about this pull request…'}
+            placeholder={refThread ? 'Ask Claude about this conversation…' : refLines ? (refSelection ? 'Ask Claude about the selection…' : 'Ask Claude about these lines…') : refFile ? 'Ask Claude about this file…' : 'Ask Claude about this pull request…'}
             className="flex-1 min-w-0 resize-none bg-transparent outline-none! text-[13px] leading-[1.45] py-1 max-h-[200px] overflow-y-auto"
           />
           <button
@@ -577,7 +613,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
             {refThread ? (
               <ThreadReference snapshot={snapshot} thread={refThread} onRemove={dropReference} />
             ) : refLines ? (
-              <LinesReference snapshot={snapshot} target={refLines} onRemove={dropReference} />
+              <LinesReference snapshot={snapshot} target={refLines} selection={refSelection} onRemove={dropReference} />
             ) : refFile ? (
               <FileReference path={refFile} onRemove={() => setIgnoredFile(refFile)} />
             ) : (

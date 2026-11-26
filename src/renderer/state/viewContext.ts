@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { LineTarget } from '../../shared/model';
+import type { LineTarget, TextSelection } from '../../shared/model';
 
 /**
  * What you're looking at in a pull request's Files view, for the Claude box to ask about unless you remove it: the lines
@@ -7,8 +7,12 @@ import type { LineTarget } from '../../shared/model';
  * state, so a drag over lines (which changes it on every line) only re-renders the Claude box.
  */
 export type ViewContext =
-  /** `from: 'text'`: an ordinary text selection in the code, rather than lines picked by their numbers. */
-  | { kind: 'lines'; target: LineTarget; from?: 'text' }
+  /**
+   * `from: 'text'`: an ordinary text selection in the code, rather than lines picked by their numbers. `selection`: what
+   * was selected and its columns, when it was part of one line (a word, a name), so Claude knows what on the line the
+   * question is about.
+   */
+  | { kind: 'lines'; target: LineTarget; from?: 'text'; selection?: TextSelection }
   | { kind: 'thread'; threadId: string };
 
 const useStore = create<{ byKey: Record<string, ViewContext | undefined> }>(() => ({ byKey: {} }));

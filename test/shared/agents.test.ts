@@ -182,3 +182,34 @@ describe('a question about the file open in a tab', () => {
     expect(claudeSystemPrompt(snap)).toContain('"PR Review · file <path>"');
   });
 });
+
+describe('a question about a word or name selected on a line', () => {
+  const request = {
+    kind: 'lines' as const,
+    prompt: 'Where else is this used?',
+    target: { path: 'src/a.ts', side: 'RIGHT' as const, startLine: 12, endLine: 12 },
+    selection: { text: 'retryPolicy', from: 11, to: 21 },
+  };
+
+  it('names the selection and its columns beside the line, and is read back from the session with them', () => {
+    const p = claudePrompt(request, { code: 'const p = retryPolicy(3);', threads: [] });
+    expect(p).toContain('Selected on these lines: "retryPolicy", columns 11–21 (the part of the line the question is about)');
+    expect(readPrompt(p)).toEqual(request);
+  });
+
+  it('reads back any text, quotes and backslashes too, and a single column', () => {
+    const odd = { ...request, selection: { text: 'say "hi" \\ \'there\'', from: 4, to: 4 } };
+    expect(readPrompt(claudePrompt(odd))).toEqual(odd);
+  });
+
+  it('shows where on the line in its label, then the selection, cut short when long', () => {
+    expect(requestLabel(request, { fileName: true })).toBe('a.ts:12:11–21 · retryPolicy');
+    expect(requestLabel({ ...request, selection: { text: 'x'.repeat(60), from: 1, to: 60 } })).toBe(`src/a.ts:12:1–60 · ${'x'.repeat(39)}…`);
+  });
+
+  it('leaves a whole-lines question as it was', () => {
+    const { selection: _, ...whole } = request;
+    expect(claudePrompt(whole)).not.toContain('Selected on these lines');
+    expect(readPrompt(claudePrompt(whole))).toEqual(whole);
+  });
+});

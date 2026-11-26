@@ -449,6 +449,16 @@ test('the Claude box asks about what you have selected or open in the diff', asy
   const panel = win.getByRole('region', { name: 'Claude' });
   const box = panel.getByRole('textbox', { name: 'Ask Claude' });
 
+  // The box fits its text at the width it has: measured while squeezed narrow (as when the panel opens), it grows tall,
+  // and once it has its width back it shrinks again by itself.
+  type Styled = { parentElement: { style: { width: string } } | null };
+  await box.evaluate((el: Styled) => void (el.parentElement!.style.width = '80px'));
+  await box.fill('x');
+  await box.fill('');
+  expect((await box.boundingBox())!.height).toBeGreaterThan(80);
+  await box.evaluate((el: Styled) => void (el.parentElement!.style.width = ''));
+  await expect.poll(async () => (await box.boundingBox())!.height).toBeLessThan(80);
+
   // Selecting lines 3–5 (dragging down the line numbers) puts them over the box, and the question goes with them.
   const file = win.locator('section[aria-label="src/calc.ts"]');
   await file.locator('[data-additions] [data-column-number="3"]').first().scrollIntoViewIfNeeded();
@@ -460,7 +470,7 @@ test('the Claude box asks about what you have selected or open in the diff', asy
   await win.mouse.up();
   // Under the box: what the question is about, with × to drop it. (The question's own label in the conversation, once
   // sent, also reads calc.ts:3–5, so the chip is found by its title.)
-  const lines = panel.locator('[title^="Your next question is about these lines"]');
+  const lines = panel.locator('[title^="Your next question is about line"]');
   await expect(lines).toBeVisible();
   await expect(lines).toContainText('calc.ts:3–5');
   await expect(lines.getByRole('button', { name: 'Don’t ask about these lines' })).toBeVisible();
@@ -508,6 +518,21 @@ test('the Claude box asks about what you have selected or open in the diff', asy
   const seven = await code(7);
   await win.mouse.click(seven.x + 30, seven.y + seven.height / 2);
   await expect(lines).toHaveCount(0);
+
+  // Part of one line (a word) goes along as what was selected, under the box and in the question.
+  await file.evaluate((s) => s.querySelector('diffs-container')?.shadowRoot?.querySelectorAll('[data-code]').forEach((c: { scrollLeft: number }) => (c.scrollLeft = 0)));
+  // A double-click picks the word, as anywhere else (mid-line, away from the line numbers, which pick whole lines).
+  await file.locator('[data-additions] [data-line="3"]').getByText('total', { exact: true }).dblclick();
+  const wordChip = panel.locator('[title^="Your next question is about “"]');
+  await expect(wordChip).toContainText('calc.ts:3:17–21');
+  const picked = (await wordChip.locator('code').innerText()).trim();
+  expect(picked).toBe('total');
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about the selection…');
+  await box.fill('What is this?');
+  await box.press('Enter');
+  // Where it is too: "total" is columns 17–21 of `export function total(…`, in the question and its label.
+  await expect.poll(lastRequest, { timeout: 15_000 }).toMatchObject({ kind: 'lines', prompt: 'What is this?', target: { startLine: 3, endLine: 3 }, selection: { text: 'total', from: 17, to: 21 } });
+  await expect(panel.getByRole('button', { name: 'calc.ts:3:17–21 · total' })).toBeVisible();
 
   // Clicking into a review thread selects it: highlighted, and the one the box asks about. Clicking elsewhere in the code
   // deselects it; × asks about nothing.

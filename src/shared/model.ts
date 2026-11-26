@@ -619,6 +619,13 @@ export interface LineTarget {
   endLine: number;
 }
 
+/** Text selected within one line: what it says, and the columns it spans (from 1, both included). */
+export interface TextSelection {
+  text: string;
+  from: number;
+  to: number;
+}
+
 /** A question for Claude about the pull request: free text, about some lines, a review thread, or a file open in a tab. */
 export interface AgentRequest {
   kind: 'prompt' | 'lines' | 'thread' | 'file';
@@ -630,6 +637,8 @@ export interface AgentRequest {
   thread?: { id: string; path: string };
   /** `file` only: the file asked about (the one open in a tab). */
   file?: { path: string };
+  /** `lines` only: the text selected on the line, when it was part of one (a word, a name), and its columns (from 1). */
+  selection?: TextSelection;
 }
 
 /** One question in the pull request's Claude session and Claude's answer, as read from the session. */

@@ -1,5 +1,5 @@
 import type { ContextMenuItem } from './ipc';
-import type { AgentRequest, ClaudeApp, ClaudeEffort, ClaudeModel, ClaudeModelChoice, ClaudeView, LineTarget, PrSnapshot } from './model';
+import type { AgentRequest, ClaudeApp, ClaudeEffort, ClaudeModel, ClaudeModelChoice, ClaudeView, LineTarget, PrSnapshot, TextSelection } from './model';
 
 /** The Claude apps a pull request's session opens in, by name. */
 export const CLAUDE_APPS: Record<ClaudeApp, { name: string }> = {
@@ -109,9 +109,17 @@ export function requestLabel(request: AgentRequest, { fileName = false } = {}): 
     const t = request.target;
     const lines = t.startLine === t.endLine ? `${t.endLine}` : `${t.startLine}–${t.endLine}`;
     const path = fileName ? (t.path.split('/').at(-1) ?? t.path) : t.path;
-    return `${path}:${lines}${t.side === 'LEFT' ? ' (old)' : ''}`;
+    const s = request.selection;
+    const where = s ? `:${columns(s)}` : '';
+    const what = s ? ` · ${s.text.length > 40 ? `${s.text.slice(0, 39)}…` : s.text}` : '';
+    return `${path}:${lines}${where}${t.side === 'LEFT' ? ' (old)' : ''}${what}`;
   }
   return 'Request';
+}
+
+/** "12–22", or "12" for one column: where on its line a selection is. */
+export function columns(s: Pick<TextSelection, 'from' | 'to'>): string {
+  return s.from === s.to ? String(s.from) : `${s.from}–${s.to}`;
 }
 
 /** A question, as the diff's markers and the conversation show it: in the session, or still on its way to it. */
@@ -135,6 +143,8 @@ export function asks(view: ClaudeView): Ask[] {
 
 /** Where your words end in a prompt PR Review sends, and the context and rules it adds begin. */
 const CONTEXT = '--- PR Review context ---';
+/** How a line question's context names the text you selected on the line (read back by `readPrompt`). */
+const SELECTED = 'Selected on these lines: ';
 
 /**
  * The first line of every prompt PR Review sends: what it is about. The app reads it back from the session (see
@@ -173,7 +183,17 @@ export function readPrompt(text: string): AgentRequest | null {
   const m = HEADER.exec(first.trim());
   if (!m) return null;
   if (m[1]) return { kind: 'prompt', prompt, target: null };
-  return { kind: 'lines', prompt, target: { path: m[2]!, side: m[3] === 'old' ? 'LEFT' : 'RIGHT', startLine: Number(m[4]), endLine: Number(m[5]) } };
+  const lines: AgentRequest = { kind: 'lines', prompt, target: { path: m[2]!, side: m[3] === 'old' ? 'LEFT' : 'RIGHT', startLine: Number(m[4]), endLine: Number(m[5]) } };
+  const selected = end >= 0 ? body.slice(end).split('\n').find((l) => l.startsWith(SELECTED)) : undefined;
+  const parts = selected ? /^("(?:[^"\\]|\\.)*"), columns (\d+)(?:–(\d+))?/.exec(selected.slice(SELECTED.length)) : null;
+  if (parts) {
+    try {
+      lines.selection = { text: JSON.parse(parts[1]!) as string, from: Number(parts[2]), to: Number(parts[3] ?? parts[2]) };
+    } catch {
+      // Not ours after all: the question still reads without it.
+    }
+  }
+  return lines;
 }
 
 /**
@@ -198,13 +218,14 @@ export function claudeSystemPrompt(snapshot: PrSnapshot): string {
 }
 
 /** What a line question adds after your words: the lines' code, the review comments on them, and where a comment goes. */
-function linesContext(t: LineTarget, context: LineContext | null): string {
+function linesContext(t: LineTarget, context: LineContext | null, selection?: TextSelection): string {
   const threads = context?.threads ?? [];
   return [
     `${t.path}, ${t.side === 'LEFT' ? 'old' : 'new'} lines ${t.startLine}–${t.endLine}:`,
     '```',
     context?.code ?? '(lines unavailable)',
     '```',
+    ...(selection ? [`${SELECTED}${JSON.stringify(selection.text)}, columns ${columns(selection)} (the part of the line the question is about)`] : []),
     ...(threads.length > 0 ? ['Review comments already on these lines:', ...threads.map((c) => `- ${c.author}: ${c.body.replace(/\s+/g, ' ').trim()}`)] : []),
     `A comment on these lines goes there: add_draft (path "${t.path}", line ${t.endLine}${t.startLine !== t.endLine ? `, start_line ${t.startLine}` : ''}, side "${t.side}").`,
   ].join('\n');
@@ -239,7 +260,7 @@ export function claudePrompt(request: AgentRequest, context: LineContext | null 
     request.kind === 'thread' && request.thread
       ? threadContext(request.thread.path, request.target, context)
       : request.kind === 'lines' && request.target
-        ? linesContext(request.target, context)
+        ? linesContext(request.target, context, request.selection)
         : request.kind === 'file' && request.file
           ? fileContext(request.file.path)
           : null;
