@@ -21,6 +21,7 @@ const FILTERS: Record<Filter, { label: string; match(t: ThreadView, s: PrSnapsho
   resolved: { label: 'Resolved', match: (t) => t.isResolved },
 };
 
+/** The side panel's comments: the review threads of the whole pull request or the file in view, filtered. */
 export function ConversationsPanel({ snapshot }: { snapshot: PrSnapshot }) {
   const key = snapshot.key;
   const ui = usePrUi(key);
@@ -50,11 +51,9 @@ export function ConversationsPanel({ snapshot }: { snapshot: PrSnapshot }) {
   };
 
   return (
-    <aside aria-label="Conversations" className="h-full flex flex-col bg-side">
-      <div className="flex items-center gap-2 pl-3 pr-1.5 pt-2.5 pb-2 border-b border-line">
-        <Octicon name="comment-discussion" className="text-muted" />
-        <h2 className="text-[13.5px] font-semibold text-strong">Comments</h2>
-        <span className="flex-1" />
+    <>
+      {/* Scope, filter and more filters on one row; it wraps only when the panel is too narrow for them. */}
+      <div className="flex flex-wrap items-center gap-2 px-3 pt-2.5">
         <Segmented
           size="sm"
           label="Conversation scope"
@@ -65,11 +64,6 @@ export function ConversationsPanel({ snapshot }: { snapshot: PrSnapshot }) {
             { value: 'file', label: 'This file' },
           ]}
         />
-        <button type="button" aria-label="Close comments" title="Close (⇧⌘C)" onClick={() => updateUi(key, { showPanel: false })} className="grid place-items-center w-7 h-7 rounded-md text-muted hover:text-fg hover:bg-raised cursor-pointer">
-          <Octicon name="x" />
-        </button>
-      </div>
-      <div className="flex items-center gap-2 px-3 pt-2.5">
         <Segmented<Filter>
           size="sm"
           label="Conversation filter"
@@ -117,6 +111,6 @@ export function ConversationsPanel({ snapshot }: { snapshot: PrSnapshot }) {
           </button>
         )}
       </div>
-    </aside>
+    </>
   );
 }

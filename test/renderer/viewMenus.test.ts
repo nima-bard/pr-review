@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextMenuItem } from '../../src/shared/ipc';
-import { agentMenuItems, viewMenuItems } from '../../src/renderer/views/pr/viewMenus';
+import { claudeMenuItems, viewMenuItems } from '../../src/renderer/views/pr/viewMenus';
 
 const item = (items: ContextMenuItem[], id: string) => items.find((i) => i !== 'separator' && i.id === id) as Exclude<ContextMenuItem, 'separator'>;
-const state = { layout: 'split' as const, wordWrap: false, showTree: true, showPanel: false, openThreads: 3 };
+const ids = (items: ContextMenuItem[]) => items.map((i) => (i === 'separator' ? '-' : i.id));
+const state = { layout: 'split' as const, wordWrap: false, showTree: true };
 
 describe('viewMenuItems', () => {
   it('checks the chosen layout and the settings that are on', () => {
@@ -12,12 +13,10 @@ describe('viewMenuItems', () => {
     expect(item(items, 'layout:unified').checked).toBe(false);
     expect(item(items, 'wrap').checked).toBe(false);
     expect(item(items, 'tree').checked).toBe(true);
-    expect(item(items, 'conversations').checked).toBe(false);
   });
 
-  it('shows the open threads next to Conversations, as the toolbar button did', () => {
-    expect(item(viewMenuItems(state), 'conversations').label).toBe('Conversations (3 open)');
-    expect(item(viewMenuItems({ ...state, openThreads: 0 }), 'conversations').label).toBe('Conversations');
+  it('leaves the side panel to its own buttons, Comments and Claude', () => {
+    expect(ids(viewMenuItems(state))).toEqual(['heading:layout', 'layout:split', 'layout:unified', '-', 'wrap', 'tree']);
   });
 
   it('has headings that can not be chosen', () => {
@@ -25,10 +24,17 @@ describe('viewMenuItems', () => {
   });
 });
 
-describe('agentMenuItems', () => {
-  it('offers a review with the agent and its conversation, checked while the panel is open', () => {
-    const items = agentMenuItems('Claude', true);
-    expect(item(items, 'review').label).toBe('Review with Claude');
-    expect(item(items, 'panel').checked).toBe(true);
+describe('claudeMenuItems', () => {
+  it('opens the session in Claude Desktop or Claude Code, and nothing else', () => {
+    const items = claudeMenuItems(true);
+    expect(ids(items)).toEqual(['open:desktop', 'open:terminal']);
+    expect(item(items, 'open:desktop')).toMatchObject({ label: 'Open in Claude Desktop', enabled: true });
+    expect(item(items, 'open:terminal')).toMatchObject({ label: 'Open in Claude Code', enabled: true });
+  });
+
+  it('can’t open a session before the first question has started it', () => {
+    const items = claudeMenuItems(false);
+    expect(item(items, 'open:desktop').enabled).toBe(false);
+    expect(item(items, 'open:terminal').enabled).toBe(false);
   });
 });

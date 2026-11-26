@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActionRun, AgentSession, PrPreview, PrSnapshot } from '../../shared/model';
+import type { ActionRun, ClaudeView, PrPreview, PrSnapshot } from '../../shared/model';
 import { api } from '../api';
 import { rememberSnapshot } from './recents';
 
@@ -13,11 +13,11 @@ interface SessionsState {
   runs: Record<string, ActionRun[]>;
   /** When the PR was last checked for changes on GitHub (a sync counts too). */
   checkedAt: Record<string, string | undefined>;
-  /** Each PR's agent conversation, once it has one. */
-  agents: Record<string, AgentSession>;
+  /** Each PR's Claude session as its conversation shows it (see `ClaudeView`), once loaded. */
+  claude: Record<string, ClaudeView>;
 }
 
-export const useSessions = create<SessionsState>(() => ({ snapshots: {}, previews: {}, runs: {}, progress: {}, errors: {}, checkedAt: {}, agents: {} }));
+export const useSessions = create<SessionsState>(() => ({ snapshots: {}, previews: {}, runs: {}, progress: {}, errors: {}, checkedAt: {}, claude: {} }));
 
 export function startSessionEvents(): () => void {
   return api.onPrEvent((event) => {
@@ -40,7 +40,7 @@ export function startSessionEvents(): () => void {
         const known = list.some((r) => r.id === event.run.id);
         return { runs: { ...s.runs, [event.key]: known ? list.map((r) => (r.id === event.run.id ? event.run : r)) : [event.run, ...list] } };
       }
-      if (event.type === 'agent') return { agents: { ...s.agents, [event.key]: event.session } };
+      if (event.type === 'claude') return { claude: { ...s.claude, [event.key]: event.view } };
       if (event.type === 'preview') return { previews: { ...s.previews, [event.key]: event.preview } };
       if (event.type === 'checked') return { checkedAt: { ...s.checkedAt, [event.key]: event.at } };
       if (event.type === 'progress') return { progress: { ...s.progress, [event.key]: event.message } };
@@ -65,14 +65,14 @@ export async function loadRuns(key: string): Promise<void> {
   useSessions.setState((s) => ({ runs: { ...s.runs, [key]: runs } }));
 }
 
-/** The PR's agent conversation as the main process has it (for a window opened while it runs). */
-export async function loadAgentSession(key: string): Promise<void> {
-  const session = await api.agentSession(key);
-  if (session) useSessions.setState((s) => ({ agents: { ...s.agents, [key]: session } }));
+/** The PR's Claude session as the main process reads it (null while Claude is off in Settings). */
+export async function loadClaudeView(key: string): Promise<void> {
+  const view = await api.claudeView(key);
+  if (view) useSessions.setState((s) => ({ claude: { ...s.claude, [key]: view } }));
 }
 
-export function useAgentSession(key: string): AgentSession | undefined {
-  return useSessions((s) => s.agents[key]);
+export function useClaudeView(key: string): ClaudeView | undefined {
+  return useSessions((s) => s.claude[key]);
 }
 
 /** Forgets a finished run, here and in the main process. */

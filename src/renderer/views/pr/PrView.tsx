@@ -3,21 +3,21 @@ import type { PrPreview, PrSnapshot } from '../../../shared/model';
 import { api, errorText } from '../../api';
 import { retryPr } from '../../state/tabs';
 import { Octicon, PrStatePill } from '../../components/octicons';
-import { Badge, Button, ErrorBox, Icon, Segmented, shortSha, Skeleton, Spinner, timeAgo } from '../../components/ui';
+import { Badge, Button, cx, ErrorBox, Icon, Segmented, shortSha, Skeleton, Spinner, timeAgo } from '../../components/ui';
 import { MergeDialog } from '../../dialogs/MergeDialog';
 import { SubmitReviewDialog } from '../../dialogs/SubmitReviewDialog';
 import { showChanges, VersionsDialog } from '../../dialogs/VersionsDialog';
 import { setSessionError, useSessions } from '../../state/sessions';
 import { getPrUi, setPrefs, updateUi, usePrefs, usePrUi, type PrViewKind } from '../../state/ui';
-import { agentMenuItems, viewMenuItems } from './viewMenus';
+import { claudeMenuItems, viewMenuItems } from './viewMenus';
 import { CommitsView } from './CommitsView';
 import { RunsDialog, RunsIndicator } from './ActionRuns';
 import { showActionsMenu } from '../../state/quickActions';
 import { FilesView } from './FilesView';
 import { Overview } from './Overview';
-import { AgentPanel } from './AgentPanel';
-import { askAgent, useAgentFor } from '../../state/agents';
-import { loadAgentSession, useAgentSession } from '../../state/sessions';
+import { toggleSidePanel, useClaudeWorking, useSidePanelShows } from './SidePanel';
+import { useClaudeSettings } from '../../state/claude';
+import { loadClaudeView, useClaudeView } from '../../state/sessions';
 
 /** GitHub's state pill, plus the review decision when it says more than "review required". */
 function StateBadge({ pr }: { pr: PrPreview }) {
@@ -83,30 +83,51 @@ function MergeButton({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
-/** The agent's one button: a menu with Review with {agent} (its comments go into your review) and its conversation. */
-function AgentButton({ snapshot }: { snapshot: PrSnapshot }) {
+/** Shows or hides the review comments in the side panel, with how many threads are unresolved. */
+function CommentsButton({ snapshot }: { snapshot: PrSnapshot }) {
   const key = snapshot.key;
-  const agent = useAgentFor(key);
-  const ui = usePrUi(key);
-  const session = useAgentSession(key);
-  if (!agent) return null;
-  const working = session?.turns.some((t) => t.status === 'running' || t.status === 'queued') ?? false;
-  const open = async () => {
-    const choice = await api.contextMenu(agentMenuItems(agent.name, ui.showAgent));
-    if (choice === 'review') await askAgent(key, { kind: 'review', prompt: '', target: null });
-    else if (choice === 'panel') updateUi(key, { showAgent: !getPrUi(key).showAgent });
+  const pressed = useSidePanelShows(key, 'comments');
+  const open = snapshot.threads.filter((t) => !t.isResolved).length;
+  return (
+    <Button aria-pressed={pressed} title="Review comments, in the side panel (⇧⌘C)" onClick={() => toggleSidePanel(key, 'comments')} className={cx(pressed && 'bg-chip-on!')}>
+      <Octicon name="comment-discussion" size={14} />
+      Comments
+      {open > 0 && <span className="px-1.5 rounded-full bg-chip text-[11px]">{open}</span>}
+    </Button>
+  );
+}
+
+/**
+ * Claude, while it's on in Settings: the button shows or hides the conversation in the side panel, and its arrow opens
+ * the pull request's session in Claude Desktop or Claude Code.
+ */
+function ClaudeButton({ snapshot }: { snapshot: PrSnapshot }) {
+  const key = snapshot.key;
+  const on = useClaudeSettings((s) => s.enabled);
+  const pressed = useSidePanelShows(key, 'claude');
+  const working = useClaudeWorking(key);
+  const hasSession = Boolean(useClaudeView(key)?.sessionId);
+  if (!on) return null;
+  const openIn = async () => {
+    const choice = await api.contextMenu(claudeMenuItems(hasSession));
+    if (choice === 'open:desktop' || choice === 'open:terminal') await api.openClaudeIn(key, choice === 'open:desktop' ? 'desktop' : 'terminal').catch((err: unknown) => setSessionError(key, errorText(err)));
   };
   return (
-    <Button
-      aria-haspopup="menu"
-      title={`${agent.name}: review this pull request, its comments go into your review (nothing goes to GitHub until you submit), or show the conversation (⇧⌘A)`}
-      onClick={() => void open()}
-      className={ui.showAgent ? 'bg-chip-on' : ''}
-    >
-      {working ? <span className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" aria-hidden="true" /> : <Icon name="comment" />}
-      {agent.name}
-      <Icon name="chevron" size={12} />
-    </Button>
+    <span className="inline-flex">
+      <Button aria-pressed={pressed} title="The conversation with Claude about this pull request, in the side panel (⇧⌘A)" onClick={() => toggleSidePanel(key, 'claude')} className={cx('rounded-r-none!', pressed && 'bg-chip-on!')}>
+        {working ? <span className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" aria-hidden="true" /> : <Icon name="comment" />}
+        Claude
+      </Button>
+      <Button
+        aria-label="Open in Claude Desktop or Claude Code"
+        aria-haspopup="menu"
+        title={hasSession ? 'Open this pull request’s session in Claude Desktop or Claude Code' : 'Ask Claude something first: the session starts with the first question'}
+        onClick={() => void openIn()}
+        className="rounded-l-none! border-l-0! px-2"
+      >
+        <Icon name="chevron" size={12} />
+      </Button>
+    </span>
   );
 }
 
@@ -116,15 +137,13 @@ function ViewMenuButton({ snapshot }: { snapshot: PrSnapshot }) {
   const open = async () => {
     const ui = getPrUi(key);
     const { wordWrap } = usePrefs.getState();
-    const openThreads = snapshot.threads.filter((t) => !t.isResolved).length;
-    const choice = await api.contextMenu(viewMenuItems({ layout: ui.layout, wordWrap, showTree: ui.showTree, showPanel: ui.showPanel, openThreads }));
+    const choice = await api.contextMenu(viewMenuItems({ layout: ui.layout, wordWrap, showTree: ui.showTree }));
     if (choice === 'layout:split' || choice === 'layout:unified') updateUi(key, { layout: choice === 'layout:split' ? 'split' : 'unified' });
     else if (choice === 'wrap') setPrefs({ wordWrap: !wordWrap });
     else if (choice === 'tree') updateUi(key, { showTree: !ui.showTree });
-    else if (choice === 'conversations') updateUi(key, { showPanel: !ui.showPanel });
   };
   return (
-    <Button aria-label="View options" aria-haspopup="menu" title="View options: layout, word wrap, file tree and conversations" onClick={() => void open()} className="px-2">
+    <Button aria-label="View options" aria-haspopup="menu" title="View options: layout, word wrap and the file tree" onClick={() => void open()} className="px-2">
       <Octicon name="gear" size={14} />
     </Button>
   );
@@ -173,6 +192,7 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
             </Button>
           )}
           <ViewMenuButton snapshot={snapshot} />
+          <CommentsButton snapshot={snapshot} />
         </>
       )}
       {/* The pull request's own actions are on the Overview; ⌥⌘1–9 run quick actions from anywhere. */}
@@ -183,7 +203,7 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
         </Button>
       )}
       {snapshot && view === 'overview' && d.state === 'OPEN' && (d.isDraft ? d.viewerCan.update : d.viewerCan.merge) && <MergeButton snapshot={snapshot} />}
-      {snapshot && <AgentButton snapshot={snapshot} />}
+      {snapshot && <ClaudeButton snapshot={snapshot} />}
       <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
         Submit review
         {drafts > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{drafts} draft{drafts === 1 ? '' : 's'}</span>}
@@ -304,10 +324,11 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   const error = useSessions((s) => s.errors[prKey]);
   const ui = usePrUi(prKey);
   const loaded = snapshot !== undefined;
-  // The PR's agent conversation, for the markers on asked lines and the Claude button, without opening the Agent panel.
+  // The PR's Claude session, for the markers on asked lines and the Claude button, before its tab is opened.
+  const claudeOn = useClaudeSettings((s) => s.enabled);
   useEffect(() => {
-    if (loaded) void loadAgentSession(prKey).catch(() => undefined);
-  }, [prKey, loaded]);
+    if (loaded && claudeOn) void loadClaudeView(prKey).catch(() => undefined);
+  }, [prKey, loaded, claudeOn]);
 
   const pr = snapshot ?? preview;
   if (!pr) {
@@ -329,13 +350,10 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
           <ErrorBox message={error} onRetry={() => void (snapshot ? api.refreshPr(prKey) : retryPr(prKey))} />
         </div>
       )}
-      <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 min-h-0">
-          {view === 'files' && (snapshot ? <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} /> : <NotYet prKey={prKey} view="files" />)}
-          {view === 'overview' && <Overview pr={pr} snapshot={snapshot} />}
-          {view === 'commits' && (snapshot ? <CommitsView snapshot={snapshot} /> : <NotYet prKey={prKey} view="commits" />)}
-        </div>
-        {snapshot && ui.showAgent && <AgentPanel snapshot={snapshot} />}
+      <div className="flex-1 min-h-0">
+        {view === 'files' && (snapshot ? <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} /> : <NotYet prKey={prKey} view="files" />)}
+        {view === 'overview' && <Overview pr={pr} snapshot={snapshot} />}
+        {view === 'commits' && (snapshot ? <CommitsView snapshot={snapshot} /> : <NotYet prKey={prKey} view="commits" />)}
       </div>
       {snapshot ? (
         <StatusBar snapshot={snapshot} />

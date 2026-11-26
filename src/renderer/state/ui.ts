@@ -8,6 +8,9 @@ export type ContentTab = { id: 'changes'; kind: 'changes' } | { id: string; kind
 
 export type { ComposerTarget } from './unsent';
 
+/** What the Files view's side panel shows: the review comments, or the conversation with Claude. */
+export type SidePanelTab = 'comments' | 'claude';
+
 /** Which version of a diff ⌘F searches: the old one (deleted and unchanged lines), the new one (added and unchanged), or both. */
 export type FindSide = 'both' | 'old' | 'new';
 
@@ -16,7 +19,9 @@ export interface PrUi {
   tree: 'changed' | 'all';
   layout: 'split' | 'unified';
   showTree: boolean;
+  /** The Files view's side panel, on `panelTab`. */
   showPanel: boolean;
+  panelTab: SidePanelTab;
   scope: 'pr' | 'file';
   filter: 'open' | 'mine' | 'reply' | 'outdated' | 'resolved' | 'all';
   contentTabs: ContentTab[];
@@ -37,10 +42,8 @@ export interface PrUi {
   showMerge: boolean;
   /** The output of background quick actions. */
   showRuns: boolean;
-  /** The Agent panel: the PR's conversation with its agent (⇧⌘A). */
-  showAgent: boolean;
-  /** A request the Agent panel should scroll to and highlight; `seq` repeats a jump to the same one. */
-  focusTurn: { id: string; seq: number } | null;
+  /** A question the Claude conversation should scroll to and highlight; `seq` repeats a jump to the same one. */
+  focusAsk: { id: string; seq: number } | null;
   showVersions: boolean;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
@@ -67,6 +70,7 @@ const DEFAULT_UI: PrUi = {
   layout: 'split',
   showTree: true,
   showPanel: true,
+  panelTab: 'comments',
   scope: 'pr',
   filter: 'open',
   contentTabs: [{ id: 'changes', kind: 'changes' }],
@@ -82,8 +86,7 @@ const DEFAULT_UI: PrUi = {
   showSubmit: false,
   showMerge: false,
   showRuns: false,
-  showAgent: false,
-  focusTurn: null,
+  focusAsk: null,
   pendingCompare: null,
   sidebar: 'files',
   search: { pattern: '', matchCase: false, wholeWord: false, regex: false, include: '', exclude: '', scope: 'changed' },
@@ -110,9 +113,27 @@ export function getPrUi(key: string): PrUi {
   return useUiStore.getState().byKey[key] ?? DEFAULT_UI;
 }
 
-/** Opens the Agent panel at request `turnId` (from a line's ask marker). */
-export function showTurn(key: string, turnId: string): void {
-  updateUi(key, (ui) => ({ showAgent: true, focusTurn: { id: turnId, seq: (ui.focusTurn?.seq ?? 0) + 1 } }));
+/** Shows the side panel on `tab`, in the Files view. */
+export function showSidePanel(key: string, tab: SidePanelTab): void {
+  updateUi(key, { view: 'files', showPanel: true, panelTab: tab });
+}
+
+/** The Comments and Claude buttons (⇧⌘C, ⇧⌘A): show the side panel on `tab`, or close it when it already shows `tab`. */
+export function toggleSidePanel(key: string, tab: SidePanelTab): void {
+  const ui = getPrUi(key);
+  if (sidePanelShows(ui, tab)) updateUi(key, { showPanel: false });
+  else showSidePanel(key, tab);
+}
+
+/** Whether the side panel is on screen showing `tab`. */
+export function sidePanelShows(ui: PrUi, tab: SidePanelTab): boolean {
+  return ui.view === 'files' && ui.showPanel && ui.panelTab === tab;
+}
+
+/** Shows question `id` in the Claude conversation (from a line's marker). */
+export function showAsk(key: string, id: string): void {
+  showSidePanel(key, 'claude');
+  updateUi(key, (ui) => ({ focusAsk: { id, seq: (ui.focusAsk?.seq ?? 0) + 1 } }));
 }
 
 export function updateUi(key: string, patch: Partial<PrUi> | ((ui: PrUi) => Partial<PrUi>)): void {

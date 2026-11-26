@@ -4,8 +4,8 @@ import { isAgentDraft } from '../../shared/drafts';
 import type { Draft, PrSnapshot } from '../../shared/model';
 import type { ReviewBridge } from './reviewBridge';
 
-/** Who is calling: the agent's name and the app's turn that started it, if any. */
-export type CallerOrigin = () => { agent: string; turnId: string | null };
+/** Who is calling, for the drafts it adds: "Claude" (the app's own), "Claude Code", or another MCP client. */
+export type CallerOrigin = () => { agent: string };
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const json = (value: unknown) => text(JSON.stringify(value, null, 2));
@@ -201,6 +201,30 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
   );
 
   registerActionTools(server, bridge);
+
+  server.registerTool(
+    'offer_choices',
+    {
+      title: 'Offer follow-up choices',
+      description:
+        'Shows choices as buttons under your answer in PR Review, for one follow-up you could do there (add a review comment, mark files as viewed, show something…). ' +
+        'Call it as the last thing in your answer, at most once, instead of asking in words. It does not wait: end your answer, and the choice the user clicks arrives as their next message.',
+      inputSchema: {
+        question: z.string().min(1).max(200).describe('One short line, e.g. "Leave a comment about the missing processors?"'),
+        choices: z
+          .array(
+            z.object({
+              label: z.string().min(1).max(40).describe('The button, e.g. "Yes, leave a comment"'),
+              prompt: z.string().min(1).max(2000).nullable().describe('What PR Review sends you when it is clicked, as the user would say it, e.g. "Yes, add that comment." Null for a choice that does nothing, like "No".'),
+            }),
+          )
+          .min(1)
+          .max(4),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async () => text('PR Review shows these as buttons under your answer. End your answer now: the choice the user clicks arrives as their next message.'),
+  );
 }
 
 /** "a, b, c and 4 more", to keep confirmations short. */

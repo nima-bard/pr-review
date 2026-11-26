@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { OutsideClaude } from '../../shared/model';
+import type { SessionLine } from '../../core/agents/conversation';
+import type { ClaudeApp } from '../../shared/model';
 
 /** A Claude Code process that has a session open, as Claude Code registers it in `~/.claude/sessions/<pid>.json`. */
 export interface OpenSession {
@@ -21,14 +22,8 @@ export interface OpenSession {
   procStart: string | null;
 }
 
-/** Claude Code's own folder: its running sessions and transcripts. */
-const claudeDir = (): string => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-
-/** Where Claude Code registers its running sessions. */
-export const sessionsDir = (): string => join(claudeDir(), 'sessions');
-
-/** Where Claude Code keeps transcripts, one folder per project. */
-export const projectsDir = (): string => join(claudeDir(), 'projects');
+/** Where Claude Code registers its running sessions (in its own folder, `~/.claude` or CLAUDE_CONFIG_DIR). */
+export const sessionsDir = (): string => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'sessions');
 
 /** Whether process `pid` still runs (EPERM: it does, as another user). */
 function alive(pid: number): boolean {
@@ -46,10 +41,12 @@ const DESKTOP_ID = /^local_[A-Za-z0-9-]{1,64}$/;
 /**
  * The running process that has Claude Code session `sessionId` open, if any. Claude Code refuses to open a session
  * in a second place ("is open in another terminal"), so Open in Claude Desktop checks here first. Entries of processes
- * that have ended are left behind, so only live ones count.
+ * that have ended are left behind, so only live ones count. When the app's own `claude -p` and another (Claude Desktop,
+ * a terminal) both have it, the other one is the one that matters, and is returned.
  */
 export async function openSession(sessionId: string, dir = sessionsDir()): Promise<OpenSession | null> {
   const names = await readdir(dir).catch(() => [] as string[]);
+  let own: OpenSession | null = null;
   for (const name of names.filter((n) => /^\d+\.json$/.test(n))) {
     const entry = await readFile(join(dir, name), 'utf8')
       .then((text) => JSON.parse(text) as Record<string, unknown>)
@@ -58,7 +55,7 @@ export async function openSession(sessionId: string, dir = sessionsDir()): Promi
     const entrypoint = typeof entry.entrypoint === 'string' ? entry.entrypoint : '';
     const inDesktop = entrypoint === 'claude-desktop';
     const host = typeof entry.hostSessionId === 'string' && DESKTOP_ID.test(entry.hostSessionId) ? entry.hostSessionId : null;
-    return {
+    const found: OpenSession = {
       pid: entry.pid,
       entrypoint,
       inDesktop,
@@ -67,8 +64,10 @@ export async function openSession(sessionId: string, dir = sessionsDir()): Promi
       startedAt: typeof entry.startedAt === 'number' ? entry.startedAt : null,
       procStart: typeof entry.procStart === 'string' ? entry.procStart : null,
     };
+    if (!entrypoint.startsWith('sdk')) return found;
+    own ??= found;
   }
-  return null;
+  return own;
 }
 
 /** Whether `pid` is still the Claude Code process that started at `procStart` (pids are reused). */
@@ -93,13 +92,13 @@ export interface ReleaseOptions {
 }
 
 /**
- * Ends Claude Desktop's process for a session while it's idle, so the session can be written to from the app, and
- * Desktop loads it afresh (with what the app added) when it's next opened or typed in. Claude Code saves as it goes,
- * and between turns there's nothing in flight; Desktop starts a new process when the session is used again. A busy
- * session, a terminal's, or a process that can't be confirmed to be the registered one is left alone (false).
+ * Ends the Claude process that has a session open while it's idle, so the session can be written to from the app.
+ * Claude Code saves as it goes, and between turns there's nothing in flight. Claude Desktop starts a new process (with
+ * what the app added) when the session is used again; a terminal drops back to its shell, where `claude --resume`
+ * continues. A busy session, or a process that can't be confirmed to be the registered one, is left alone (false).
  */
-export async function endIdleDesktopProcess(holder: OpenSession, { check = sameProcess, waitMs = 5000 }: ReleaseOptions = {}): Promise<boolean> {
-  if (!holder.inDesktop || holder.status !== 'idle' || !holder.procStart || !(await check(holder.pid, holder.procStart))) return false;
+export async function endIdleClaude(holder: OpenSession, { check = sameProcess, waitMs = 5000 }: ReleaseOptions = {}): Promise<boolean> {
+  if (holder.status !== 'idle' || !holder.procStart || !(await check(holder.pid, holder.procStart))) return false;
   try {
     process.kill(holder.pid, 'SIGTERM');
   } catch {
@@ -114,59 +113,45 @@ export async function endIdleDesktopProcess(holder: OpenSession, { check = sameP
 
 /**
  * Gets session `sessionId` ready for the app to write to. Claude Desktop's idle process for it is ended (see
- * `endIdleDesktopProcess`). Returns where it stays open (Claude Desktop answering, or a terminal), in which case the
+ * `endIdleClaude`). Returns where it stays open (Claude Desktop answering, or a terminal), in which case the
  * app's request runs beside it; null when the app may write to it. The app's own `claude -p` runs don't count.
  */
-export async function claimSession(sessionId: string, opts: ReleaseOptions = {}): Promise<OutsideClaude | null> {
+export async function claimSession(sessionId: string, opts: ReleaseOptions = {}): Promise<ClaudeApp | null> {
   const holder = await openSession(sessionId, opts.dir);
   if (!holder || holder.entrypoint.startsWith('sdk')) return null;
   if (!holder.inDesktop) return 'terminal';
-  if (!(await endIdleDesktopProcess(holder, opts))) return 'desktop';
+  if (!(await endIdleClaude(holder, opts))) return 'desktop';
   // Desktop may have opened it again straight away.
-  const again = await openSession(sessionId, opts.dir);
-  return again && !again.entrypoint.startsWith('sdk') ? (again.inDesktop ? 'desktop' : 'terminal') : null;
+  return (await openElsewhere(sessionId, opts.dir))?.app ?? null;
 }
 
 /**
- * The transcript of session `sessionId`: `<projects>/<project>/<id>.jsonl`. The project folder is named after the
- * folder Claude Code ran in, which for a worktree may be its repository's, so every project is looked in.
+ * Takes session `sessionId` from Claude Code in a terminal, when you say so: its Claude ends if it's idle. False when
+ * Claude is answering there (or the process can't be confirmed); true once no terminal has it (Claude Desktop's copy is
+ * `claimSession`'s to handle).
  */
-export async function findTranscript(sessionId: string, dir = projectsDir()): Promise<string | null> {
-  const projects = await readdir(dir).catch(() => [] as string[]);
-  for (const project of projects) {
-    const path = join(dir, project, `${sessionId}.jsonl`);
-    if (await stat(path).then((s) => s.isFile(), () => false)) return path;
-  }
-  return null;
+export async function takeFromTerminal(sessionId: string, opts: ReleaseOptions = {}): Promise<boolean> {
+  const holder = await openSession(sessionId, opts.dir);
+  if (!holder || holder.entrypoint.startsWith('sdk') || holder.inDesktop) return true;
+  return endIdleClaude(holder, opts);
 }
 
-/**
- * The whole lines transcript `path` gained since byte `offset`, and the offset after them. A line Claude Code is still
- * writing waits for the next read. A file that got shorter (rewritten) is read again from the start (`restarted`).
- * Null when there's no new whole line or the file is gone.
- */
-export async function readTranscript(path: string, offset: number): Promise<{ text: string; end: number; restarted: boolean } | null> {
-  const file = await open(path, 'r').catch(() => null);
-  if (!file) return null;
-  try {
-    const { size } = await file.stat();
-    const restarted = size < offset;
-    const from = restarted ? 0 : offset;
-    if (size === from) return null;
-    const buffer = Buffer.alloc(size - from);
-    await file.read(buffer, 0, buffer.length, from);
-    const whole = buffer.lastIndexOf(0x0a) + 1;
-    if (whole === 0) return restarted ? { text: '', end: 0, restarted } : null;
-    return { text: buffer.subarray(0, whole).toString('utf8'), end: from + whole, restarted };
-  } finally {
-    await file.close();
-  }
+/** Where session `sessionId` is open outside the app now, and whether Claude is answering there; the app's own runs don't count. */
+export async function openElsewhere(sessionId: string, dir = sessionsDir()): Promise<{ app: ClaudeApp; busy: boolean } | null> {
+  const holder = await openSession(sessionId, dir);
+  if (!holder || holder.entrypoint.startsWith('sdk')) return null;
+  return { app: holder.inDesktop ? 'desktop' : 'terminal', busy: holder.status !== 'idle' };
 }
 
-/** The link that switches Claude Desktop to its Code session `desktopId`. */
-export const desktopSessionLink = (desktopId: string): string => `claude://code/continue?session=${encodeURIComponent(desktopId)}`;
+/** The Agent SDK, loaded when first needed (it's large); only its readers of Claude Code's local session files are used. */
+const sdk = () => import('@anthropic-ai/claude-agent-sdk');
 
-/** Shows Claude Desktop's Code session `desktopId`, bringing Desktop to the front. */
-export function showInDesktop(desktopId: string): Promise<void> {
-  return new Promise((resolve, reject) => execFile('open', [desktopSessionLink(desktopId)], (err) => (err ? reject(err) : resolve())));
+/** When session `sessionId` last changed, or undefined when Claude Code doesn't have it (deleted, or cleaned up). */
+export async function sessionChangedAt(sessionId: string, dir: string): Promise<number | undefined> {
+  return (await (await sdk()).getSessionInfo(sessionId, { dir }))?.lastModified;
+}
+
+/** The session's messages, as the Agent SDK documents them (Claude Code's files themselves are internal). */
+export async function sessionMessages(sessionId: string, dir: string): Promise<SessionLine[]> {
+  return (await (await sdk()).getSessionMessages(sessionId, { dir })) as SessionLine[];
 }

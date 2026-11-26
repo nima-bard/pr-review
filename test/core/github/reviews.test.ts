@@ -79,7 +79,7 @@ describe('submitReview', () => {
 
   it('posts the drafts an agent wrote with your own, with nothing to accept first, and clears them all', async () => {
     const drafts = new DraftStore((k) => join(dir, `${k}.json`));
-    await drafts.saveAll('pr3', [draft('own'), draft('claude', { origin: { agent: 'Claude', turnId: 't1' } })]);
+    await drafts.saveAll('pr3', [draft('own'), draft('claude', { origin: { agent: 'Claude' } })]);
     const { client, calls } = fakeClient();
     await submitReview({ client, drafts, prKey: 'pr3', pullRequestId: 'PR_3', headOid: 'h1', pendingReviewId: 'R', event: 'COMMENT', body: '', spacingMs: 0 });
     expect(calls.filter((c) => c.query.includes('addPullRequestReviewThread(')).map((c) => c.vars.body)).toEqual(['comment own', 'comment claude']);

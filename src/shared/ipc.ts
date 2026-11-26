@@ -1,7 +1,9 @@
 import type {
   ActionRun,
   AgentRequest,
-  AgentSession,
+  ClaudeApp,
+  ClaudeModels,
+  ClaudeView,
   AuthStatus,
   BrowserExtensionInfo,
   CodeSearchQuery,
@@ -116,19 +118,26 @@ export interface Api {
   openExtensionsPage(page: string): Promise<boolean>;
   /** Shows the Chrome extension's folder in Finder. */
   revealBrowserExtension(): Promise<void>;
-  /** Sends a request to the PR's agent session (queued behind a running one). */
-  askAgent(key: string, request: AgentRequest): Promise<void>;
-  stopAgentTurn(key: string, turnId: string): Promise<void>;
-  /** The PR's agent conversation, for a window opened while it runs; null before the first request. */
-  agentSession(key: string): Promise<AgentSession | null>;
-  /** Switches the PR to another connector; the next request starts a new session. */
-  setAgentConnector(key: string, connectorId: string): Promise<void>;
-  /** Shows the PR's Claude Code session in Claude Desktop (`claude --desktop --resume <id>`); later app requests fork. */
-  openAgentInDesktop(key: string): Promise<void>;
-  /** Deletes the drafts an agent turn added (ones you edited are yours and stay). */
-  deleteTurnDrafts(key: string, turnId: string): Promise<void>;
-  /** Removes a line ask's marker from the diff for good; the request stays in the Agent panel. */
-  hideAskMarker(key: string, turnId: string): Promise<void>;
+  /** Asks Claude in the PR's session; it waits while Claude Desktop answers there or Claude Code has the session. */
+  askClaude(key: string, request: AgentRequest): Promise<void>;
+  /** Drops a question that hasn't reached the session yet. */
+  cancelClaudeRequest(key: string, pendingId: string): Promise<void>;
+  /** Sends a question that couldn't be sent again. */
+  retryClaudeRequest(key: string, pendingId: string): Promise<void>;
+  /** Ends the answer Claude is giving to a question from the app. */
+  stopClaude(key: string): Promise<void>;
+  /** OK on "close Claude Code there and send": takes the session from an idle Claude Code in a terminal, then sends. */
+  takeClaudeSession(key: string): Promise<void>;
+  /** The PR's Claude session as its conversation shows it (read from the session); null while Claude is off. */
+  claudeView(key: string): Promise<ClaudeView | null>;
+  /** Opens the PR's session in Claude Desktop or Claude Code (a terminal); the same session every time. */
+  openClaudeIn(key: string, app: ClaudeApp): Promise<void>;
+  /** Removes a line question's marker from the diff for good; the question stays in the session. */
+  hideAskMarker(key: string, exchangeId: string): Promise<void>;
+  /** Declines the choices Claude offered after an exchange (a choice that sends nothing, like "No"). */
+  dismissClaudeOffer(key: string, exchangeId: string): Promise<void>;
+  /** The models (and their effort levels) Settings › Claude offers: Claude Code's own list when it can be read. */
+  claudeModels(): Promise<ClaudeModels>;
   /** The PR Review MCP server: whether it runs, its URL, and whether Claude Code has it registered. */
   mcpStatus(): Promise<McpStatus>;
   /** Registers the MCP server with Claude Code (user scope), after asking; Desktop's Code tab then sees it too. */
@@ -153,7 +162,7 @@ export interface Api {
  */
 export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string; checked?: boolean } | 'separator';
 
-export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'toggle-agent' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
+export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-comments' | 'toggle-claude' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 
 export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks'>;
 
@@ -219,13 +228,16 @@ export const API_METHODS = [
   'checkForUpdate',
   'setupInfo',
   'pickFolder',
-  'askAgent',
-  'stopAgentTurn',
-  'agentSession',
-  'setAgentConnector',
-  'openAgentInDesktop',
-  'deleteTurnDrafts',
+  'askClaude',
+  'cancelClaudeRequest',
+  'retryClaudeRequest',
+  'stopClaude',
+  'takeClaudeSession',
+  'claudeView',
+  'openClaudeIn',
   'hideAskMarker',
+  'dismissClaudeOffer',
+  'claudeModels',
   'mcpStatus',
   'connectClaudeCode',
   'copyMcpClientConfig',

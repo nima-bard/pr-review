@@ -16,7 +16,7 @@ const draft = (origin?: Draft['origin']): Draft => ({
 
 describe('isAgentDraft', () => {
   it('is an agent draft while it keeps the origin an agent gave it; your own drafts are not', () => {
-    expect(isAgentDraft(draft({ agent: 'Claude', turnId: 't' }))).toBe(true);
+    expect(isAgentDraft(draft({ agent: 'Claude' }))).toBe(true);
     expect(isAgentDraft(draft())).toBe(false);
   });
 });

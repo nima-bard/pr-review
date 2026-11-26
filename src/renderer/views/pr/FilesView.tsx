@@ -18,9 +18,9 @@ import { useFocusLine } from '../../diff/useFocusLine';
 import { useSearchHighlights } from '../../diff/useSearchHighlights';
 import { useFindInView } from '../../diff/useFindInView';
 import { FindBar } from './FindBar';
-import { ConversationsPanel } from './ConversationsPanel';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
+import { SidePanel } from './SidePanel';
 
 async function showTabMenu(snapshot: PrSnapshot, id: string): Promise<void> {
   const key = snapshot.key;
@@ -414,7 +414,7 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
   const [help, setHelp] = useState(false);
   const toggleHelp = useCallback(() => setHelp((h) => !h), []);
   useReviewKeys(snapshot, active && !help, toggleHelp);
-  const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['conversations'] : [])];
+  const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['side'] : [])];
   const layout = useDefaultLayout({ id: `files-${snapshot.role}`, panelIds });
   return (
     <>
@@ -434,8 +434,8 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
       {ui.showPanel && (
         <>
           <Separator className={SEPARATOR} />
-          <Panel id="conversations" defaultSize="22" minSize={240} maxSize="40">
-            <ConversationsPanel snapshot={snapshot} />
+          <Panel id="side" defaultSize="26" minSize={280} maxSize="45">
+            <SidePanel snapshot={snapshot} />
           </Panel>
         </>
       )}

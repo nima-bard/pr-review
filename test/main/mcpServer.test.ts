@@ -2,13 +2,13 @@ import { request } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startMcpServer, type ChannelBridge, type RunningMcpServer } from '../../src/main/mcpServer';
+import type { ReviewBridge } from '../../src/core/agents/reviewBridge';
+import { startMcpServer, type RunningMcpServer } from '../../src/main/mcpServer';
 
 const port = 47_000 + Math.floor(Math.random() * 900);
 const token = 'secret';
 
-const replies: string[] = [];
-const bridge: ChannelBridge = {
+const bridge: ReviewBridge = {
   openPrs: () => [{ key: 'github.com/o/r#1', url: 'https://github.com/o/r/pull/1', title: 'T', worktree: '/wt' }],
   snapshot: () => {
     throw new Error('not open');
@@ -25,7 +25,6 @@ const bridge: ChannelBridge = {
   searchCode: async () => ({ files: [], total: 0, truncated: false, error: null }),
   allFiles: async () => [],
   reveal: () => undefined,
-  agentReply: async (pr, turnId, text) => void replies.push(`${pr} ${turnId} ${text}`),
 };
 
 /** A raw POST, to check what the server refuses before MCP sees the request. */

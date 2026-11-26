@@ -1,7 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { isConnectorKind } from '../../shared/agents';
-import type { AgentSession, RepoMapping, Settings, Version } from '../../shared/model';
+import type { RepoMapping, Settings, Version } from '../../shared/model';
 import { readJson, writeJson } from './jsonStore';
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -25,8 +24,8 @@ export const DEFAULT_SETTINGS: Settings = {
   quickActions: [],
   terminalApp: '',
   mcpPort: 47823,
-  agents: [],
-  agentParallel: 3,
+  // Claude is optional: Settings › Claude turns it on.
+  claude: { enabled: false, model: '', effort: '' },
 };
 
 export interface ManualPlacement {
@@ -54,11 +53,14 @@ export class AppState {
   private async load(): Promise<AppStateFile> {
     if (!this.state) {
       const raw = await readJson<Partial<AppStateFile>>(this.file, {});
+      // Settings from before Claude was the app's only agent listed agents; a Claude agent carries over, on, with its model.
+      const { agents, agentParallel: _parallel, ...stored } = (raw.settings ?? {}) as Partial<Settings> & { agents?: { kind?: string; model?: string }[]; agentParallel?: unknown };
+      const oldClaude = agents?.find((a) => a.kind === 'claude-code' || a.kind === 'claude-terminal');
       // Settings saved before the first-run setup existed come from an install that's already set up.
-      const settings = { ...DEFAULT_SETTINGS, ...(raw.settings ? { setupDone: true } : {}), ...raw.settings };
+      const settings = { ...DEFAULT_SETTINGS, ...(raw.settings ? { setupDone: true } : {}), ...stored };
+      settings.claude = { ...DEFAULT_SETTINGS.claude, ...(oldClaude ? { enabled: true, model: oldClaude.model ?? '' } : {}), ...stored.claude };
       this.state = {
-        // Agents of a kind the app no longer has (the old Claude Desktop hand-off) are dropped.
-        settings: { ...settings, agents: settings.agents.filter((a) => isConnectorKind(a.kind)) },
+        settings,
         repos: raw.repos ?? [],
         openTabs: raw.openTabs ?? [],
         ownedWorktrees: raw.ownedWorktrees ?? [],
@@ -152,20 +154,6 @@ export class AppState {
 
   async saveViewedBlobs(prKey: string, blobs: Record<string, string>): Promise<void> {
     await writeJson(this.viewedFile(prKey), blobs);
-  }
-
-  private agentFile(prKey: string): string {
-    return join(this.dir, 'agents', `${safeName(prKey)}.json`);
-  }
-
-  /** The PR's agent conversation (see `AgentSession`), or null before its first request. */
-  async agentSession(prKey: string): Promise<AgentSession | null> {
-    return readJson<AgentSession | null>(this.agentFile(prKey), null);
-  }
-
-  /** Keeps the last 200 turns. */
-  async saveAgentSession(prKey: string, session: AgentSession): Promise<void> {
-    await writeJson(this.agentFile(prKey), { ...session, turns: session.turns.slice(-200) });
   }
 
   draftsFile(prKey: string): string {

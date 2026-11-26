@@ -27,7 +27,7 @@ type Message =
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const clip = (s: string, n = 80) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-/** A tool call as one line for the Agent panel, or null for plumbing not worth showing. */
+/** A tool call as one line for the conversation, or null for plumbing not worth showing. */
 export function describeTool(name: string, input: Record<string, unknown>): string | null {
   const path = str(input.file_path) || str(input.path);
   switch (name) {
@@ -43,6 +43,8 @@ export function describeTool(name: string, input: Record<string, unknown>): stri
       const n = Array.isArray(input.paths) ? input.paths.length : 0;
       return `Marked ${n} file${n === 1 ? '' : 's'} as ${input.viewed === false ? 'not viewed' : 'viewed'}`;
     }
+    case 'mcp__pr-review__offer_choices':
+      return null;
     case 'mcp__pr-review__search_code':
       return `Searched for ${clip(str(input.query), 60)}${input.show === true ? ' in PR Review' : ''}`;
     case 'mcp__pr-review__show_in_app':
@@ -76,6 +78,15 @@ export function parseClaudeLine(state: ClaudeStreamState, line: string): ClaudeS
   } catch {
     return state;
   }
+  return foldClaudeMessage(state, msg);
+}
+
+/** Folds one message into the state: stream-json output, or a message read back from a session (same shapes). */
+export function foldClaudeMessage(state: ClaudeStreamState, msg: { type: string; message?: unknown }): ClaudeStreamState {
+  return fold(state, msg as Message);
+}
+
+function fold(state: ClaudeStreamState, msg: Message): ClaudeStreamState {
   if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) return { ...state, sessionId: msg.session_id };
   if (msg.type === 'assistant') {
     let next = state;

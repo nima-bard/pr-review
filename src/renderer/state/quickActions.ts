@@ -5,7 +5,6 @@ import type { ContextMenuItem } from '../../shared/ipc';
 import { api, errorText } from '../api';
 import { setSessionError } from './sessions';
 import { openSettings } from './tabs';
-import { agentFor, askAgent } from './agents';
 
 /** The quick actions from Settings, kept here for the menus and shortcuts. */
 export const useQuickActions = create<{ actions: QuickAction[] }>(() => ({ actions: [] }));
@@ -42,9 +41,7 @@ export async function runQuickAction(key: string, actionId: string, file: string
 /** The Actions menu: the PR's actions with their shortcuts, and a way to Settings. */
 export async function showActionsMenu(snapshot: PrSnapshot): Promise<void> {
   const actions = prActions(snapshot);
-  const agent = agentFor(snapshot.key);
   const items: ContextMenuItem[] = [
-    ...(agent ? [{ id: 'agent-review', label: `Review with ${agent.name}` }, 'separator' as const] : []),
     ...actions.map((a, i) => ({ id: `qa:${a.id}`, label: a.mode === 'terminal' ? `${a.name} ↗` : a.name, accelerator: i < 9 ? `Alt+Cmd+${i + 1}` : undefined })),
     ...(actions.length === 0 ? [{ id: 'none', label: 'No quick actions for this repository', enabled: false }] : []),
     'separator',
@@ -52,6 +49,5 @@ export async function showActionsMenu(snapshot: PrSnapshot): Promise<void> {
   ];
   const choice = await api.contextMenu(items);
   if (choice === 'settings') openSettings('quick-actions');
-  else if (choice === 'agent-review') await askAgent(snapshot.key, { kind: 'review', prompt: '', target: null });
   else if (choice?.startsWith('qa:')) await runQuickAction(snapshot.key, choice.slice(3));
 }

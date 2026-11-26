@@ -1,9 +1,9 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { claimSession, desktopSessionLink, findTranscript, openSession, readTranscript, sameProcess } from '../../src/main/agents/claudeSessions';
+import { claimSession, openElsewhere, openSession, sameProcess, takeFromTerminal } from '../../src/main/agents/claudeSessions';
 
 const dir = mkdtempSync(join(tmpdir(), 'prr-claude-sessions-'));
 const children: ChildProcess[] = [];
@@ -35,12 +35,6 @@ describe('openSession', () => {
   it("names Desktop's session after Claude Code's when the entry has no usable Desktop id", async () => {
     entry(process.pid, { sessionId: 'abc-1', entrypoint: 'claude-desktop', hostSessionId: 'local_../evil' });
     expect((await openSession('abc-1', dir))?.desktopId).toBe('local_abc-1');
-  });
-});
-
-describe('desktopSessionLink', () => {
-  it("switches Claude Desktop to the session with its code/continue link", () => {
-    expect(desktopSessionLink('local_f52ec0a6-fca2')).toBe('claude://code/continue?session=local_f52ec0a6-fca2');
   });
 });
 
@@ -84,37 +78,34 @@ describe('handing a session back from Claude Desktop', () => {
     expect([busy.running(), terminal.running(), other.running()]).toEqual([true, true, true]);
   });
 
+  it('says where else a session is open and whether Claude is answering there', async () => {
+    await holder('answering-in-desktop', { entrypoint: 'claude-desktop', status: 'busy' });
+    expect(await openElsewhere('answering-in-desktop', dir)).toEqual({ app: 'desktop', busy: true });
+    await holder('idle-in-terminal', { entrypoint: 'cli', status: 'idle' });
+    expect(await openElsewhere('idle-in-terminal', dir)).toEqual({ app: 'terminal', busy: false });
+  });
+
+  it('takes a session from an idle Claude Code in a terminal when asked, never while it answers', async () => {
+    const answering = await holder('busy-in-terminal', { entrypoint: 'cli', status: 'busy' });
+    expect(await takeFromTerminal('busy-in-terminal', { dir })).toBe(false);
+    expect(answering.running()).toBe(true);
+    const idle = await holder('idle-in-terminal-2', { entrypoint: 'cli', status: 'idle' });
+    expect(await takeFromTerminal('idle-in-terminal-2', { dir })).toBe(true);
+    if (idle.running()) await new Promise((r) => idle.child.once('exit', r));
+    expect(idle.child.signalCode).toBe('SIGTERM');
+    expect(await takeFromTerminal('nowhere', { dir })).toBe(true);
+  });
+
+  it("finds Claude Desktop or a terminal holding a session even while the app's own claude -p has it too", async () => {
+    await holder('shared', { entrypoint: 'sdk-cli', status: 'idle' });
+    await holder('shared', { entrypoint: 'claude-desktop', status: 'busy' });
+    expect(await openElsewhere('shared', dir)).toEqual({ app: 'desktop', busy: true });
+  });
+
   it("doesn't count the app's own claude -p runs, or a session open nowhere", async () => {
     const own = await holder('own-run', { entrypoint: 'sdk-cli', status: 'busy' });
     expect(await claimSession('own-run', { dir })).toBeNull();
     expect(own.running()).toBe(true);
     expect(await claimSession('nowhere', { dir })).toBeNull();
-  });
-});
-
-describe('transcripts', () => {
-  const projects = join(dir, 'projects');
-
-  it("finds a session's transcript in whichever project folder Claude Code put it", async () => {
-    mkdirSync(join(projects, '-repo-a'), { recursive: true });
-    mkdirSync(join(projects, '-repo-b'), { recursive: true });
-    writeFileSync(join(projects, '-repo-b', 's1.jsonl'), '');
-    expect(await findTranscript('s1', projects)).toBe(join(projects, '-repo-b', 's1.jsonl'));
-    expect(await findTranscript('s2', projects)).toBeNull();
-    expect(await findTranscript('s1', join(dir, 'no-projects'))).toBeNull();
-  });
-
-  it('reads only whole new lines, keeps a line still being written for later, and starts over when the file shrinks', async () => {
-    const file = join(projects, '-repo-b', 's1.jsonl');
-    writeFileSync(file, '{"a":1}\n{"b":');
-    const first = await readTranscript(file, 0);
-    expect(first).toEqual({ text: '{"a":1}\n', end: 8, restarted: false });
-    expect(await readTranscript(file, 8)).toBeNull();
-    appendFileSync(file, '"é"}\n');
-    expect(await readTranscript(file, 8)).toEqual({ text: '{"b":"é"}\n', end: 19, restarted: false });
-    expect(await readTranscript(file, 19)).toBeNull();
-    writeFileSync(file, '{"c":3}\n');
-    expect(await readTranscript(file, 19)).toEqual({ text: '{"c":3}\n', end: 8, restarted: true });
-    expect(await readTranscript(join(projects, 'gone.jsonl'), 0)).toBeNull();
   });
 });

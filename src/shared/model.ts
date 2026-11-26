@@ -118,10 +118,8 @@ export interface FileContent {
  * goes out with Submit; once you edit it, it is yours and loses its origin.
  */
 export interface DraftOrigin {
-  /** The MCP client or connector name, e.g. "Claude Code". */
+  /** The MCP client's name, e.g. "Claude" or "Claude Code". */
   agent: string;
-  /** The agent turn that asked for it, so a run's drafts can be listed or deleted together. */
-  turnId: string | null;
 }
 
 export interface Draft {
@@ -415,7 +413,7 @@ export type PrEvent =
   /** A background quick action started, printed something or finished. */
   | { type: 'action'; key: string; run: ActionRun }
   /** The PR's agent conversation changed (a turn started, streamed, ended). */
-  | { type: 'agent'; key: string; session: AgentSession }
+  | { type: 'claude'; key: string; view: ClaudeView }
   /** An agent asked to show the user something in the PR's tab (the show_in_app and search_code MCP tools). */
   | { type: 'reveal'; key: string; target: RevealTarget };
 
@@ -526,101 +524,116 @@ export interface Settings {
   terminalApp: string;
   /** The MCP server's port on 127.0.0.1 (fixed, so registered clients keep working across restarts). */
   mcpPort: number;
-  /** Agents the app can ask; the first is the default. Empty until you set one up. */
-  agents: AgentConnector[];
-  /**
-   * How many agent requests run at once for one pull request (1–8). One uses the PR's session; while it's busy, the
-   * others run beside it as side branches of the conversation, so asking never waits for the request before.
-   */
-  agentParallel: number;
+  /** Claude in the app (see `ClaudeSettings`). */
+  claude: ClaudeSettings;
 }
 
-/** An agent the app can ask (Settings › Agents). */
-export interface AgentConnector {
-  id: string;
-  name: string;
-  /**
-   * claude-code: a Claude Code session per PR that the app runs (`claude -p`), with nothing to confirm or send by hand;
-   * claude-terminal: a live Claude Code session in your terminal that requests are pushed into; command: any command
-   * line (Codex, Gemini CLI…).
-   */
-  kind: 'claude-code' | 'claude-terminal' | 'command';
-  /** `command` only: run by the login shell in the worktree, with the PR_* variables, PR_PROMPT and PR_REQUEST_FILE. */
-  command: string;
-  /** `claude-code` and `claude-terminal`: a model alias or id; empty uses the CLI's default. */
+/** Settings › Claude. */
+export interface ClaudeSettings {
+  /** Ask Claude about pull requests in the app: each pull request gets one Claude Code session. */
+  enabled: boolean;
+  /** A model alias or id for the app's requests; empty uses Claude Code's default. */
   model: string;
+  /** How hard Claude thinks for the app's requests; empty uses the model's default. */
+  effort: ClaudeEffort | '';
 }
 
-/**
- * A request from the app to a PR's agent: free text, about some lines, or a whole review; or `restore`, the app's own
- * request that rebuilds a deleted session from the conversation it kept (see `AgentSession.restoreHistory`).
- */
+/** Claude Code's effort levels (`--effort`). */
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** A model Claude Code offers, as Settings › Claude lists it. */
+export interface ClaudeModel {
+  /** What `--model` takes: an alias ("opus") or a model id. */
+  value: string;
+  name: string;
+  description: string;
+  /** The effort levels it supports; empty when it has none. */
+  efforts: ClaudeEffort[];
+}
+
+/** The models to choose from: Claude Code's own list, or a standard one when it couldn't be read. */
+export interface ClaudeModels {
+  models: ClaudeModel[];
+  fromClaudeCode: boolean;
+}
+
+/** The Claude apps a pull request's session also opens in, besides PR Review. */
+export type ClaudeApp = 'desktop' | 'terminal';
+
+/** Lines of a changed file, as a question about them names them. */
+export interface LineTarget {
+  path: string;
+  side: DiffSide;
+  startLine: number;
+  endLine: number;
+}
+
+/** A question for Claude about the pull request: free text, or about some lines. */
 export interface AgentRequest {
-  kind: 'prompt' | 'lines' | 'review' | 'restore';
-  /** What you typed (empty for a review or a restore). */
+  kind: 'prompt' | 'lines';
+  /** What you typed. */
   prompt: string;
   /** `lines` only: where "+" was clicked. */
-  target: { path: string; side: DiffSide; startLine: number; endLine: number } | null;
+  target: LineTarget | null;
 }
 
-/** One request and its answer, as the Agent panel shows it. */
-export interface AgentTurn {
+/** One question in the pull request's Claude session and Claude's answer, as read from the session. */
+export interface Exchange {
+  /** The prompt's id in the session. */
   id: string;
-  connectorId: string;
-  /** The connector's name when the turn ran, for labels. */
-  agent: string;
+  /** Asked in PR Review (its prompts carry a header), or in Claude Desktop or Claude Code. */
+  asked: 'app' | 'elsewhere';
   request: AgentRequest;
-  startedAt: string;
+  /** When it was asked. */
+  at: string | null;
+  /** When Claude last wrote to it: with `at`, how long it worked. */
   endedAt: string | null;
-  status: 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'handed-off';
-  /** The agent's answer so far (streamed by the claude-code and command connectors). */
+  /** Claude's answer so far. */
   reply: string;
-  /** Tool activity worth showing, e.g. "Added a draft on src/a.ts:42". */
+  /** What Claude did worth showing, e.g. "Added a draft on src/a.ts:42". */
   activity: string[];
-  /** Drafts added during this turn. */
+  /** Drafts Claude added while answering. */
   draftIds: string[];
-  /** In US dollars, when the agent reports it. */
-  costUsd: number | null;
+  /** Follow-up choices Claude offered at the end of its answer, shown as buttons (the `offer_choices` tool). */
+  offer: ClaudeOffer | null;
+  /** Claude's turn ended. */
+  done: boolean;
+}
+
+/** Choices Claude offers after an answer: a short question, and buttons that send their prompt back to it. */
+export interface ClaudeOffer {
+  question: string;
+  choices: { label: string; prompt: string | null }[];
+}
+
+/** A question on its way to the session. */
+export interface PendingRequest {
+  id: string;
+  request: AgentRequest;
+  /** waiting: for the session to be free; sent: Claude hasn't read it yet; failed: it couldn't be sent (`error`). */
+  state: 'waiting' | 'sent' | 'failed';
   error: string | null;
-  /** A line ask whose marker you removed from the diff (the request stays in the Agent panel); saved, so it stays away. */
-  markerHidden?: boolean;
-  /**
-   * Ran beside the PR's session because another request was using it: a side branch that knows the conversation so
-   * far, but whose question and answer aren't added to the session (nor to Claude Desktop's copy of it).
-   */
-  branch?: boolean;
-  /**
-   * Ran as a side branch because Claude Desktop was answering in the PR's session, or a terminal had it open: writing
-   * to it from the app too would split the conversation there. (Desktop's idle copy is closed instead, see
-   * `claimSession`.)
-   */
-  besideOpen?: OutsideClaude;
-  /** Asked in the PR's session outside the app (typed in Claude Desktop or a terminal) and read from its transcript. */
-  outside?: OutsideClaude;
 }
 
-/** Where else a PR's Claude Code session can be open. */
-export type OutsideClaude = 'desktop' | 'terminal';
-
-/** A PR's agent conversation: every request continues the same session. */
-export interface AgentSession {
-  connectorId: string;
-  /** The Claude Code session id the app chose (claude-code, claude-terminal), or null. */
+/** What the Claude conversation shows for a pull request: its Claude session as read, and the questions on their way. */
+export interface ClaudeView {
+  /** Null until the first question. */
   sessionId: string | null;
-  /**
-   * Whether the Claude Code session exists yet (the first run uses --session-id, later ones --resume). It is never
-   * branched: Claude Desktop and the app take turns on this one session, which keeps one Desktop session per PR.
-   */
-  started: boolean;
-  /**
-   * The previous session was deleted (in Claude Desktop, say): the next new session starts with a recap of the
-   * questions and answers kept here, so Claude continues with the same context.
-   */
-  restoreHistory?: boolean;
-  turns: AgentTurn[];
+  exchanges: Exchange[];
+  pending: PendingRequest[];
+  /** Who is answering in the session now: the app, Claude Desktop or Claude Code. */
+  busy: 'app' | ClaudeApp | null;
+  /** Questions wait because Claude Desktop is answering or Claude Code has the session open. */
+  waitingFor: ClaudeApp | null;
+  /** Line questions whose marker you removed from the diff. */
+  hiddenMarkers: string[];
+  /** Exchanges whose offered choices you declined (a choice without a prompt, like "No"). */
+  dismissedOffers: string[];
+  /** Why the last attempt to reach Claude failed, until the next one. */
+  error: string | null;
 }
 
-/** The PR Review MCP server, for Settings › Agents. */
+/** The PR Review MCP server, for Settings › Claude. */
 export interface McpStatus {
   running: boolean;
   url: string;

@@ -21,7 +21,7 @@ const draft = (id: string, origin?: DraftOrigin): Draft => ({
 /** A bridge over one open PR whose only changed file is src/a.ts (RIGHT lines 1–5 and 9, LEFT line 2). */
 function fakeBridge() {
   // 'mine': yours (written, or an agent's that you edited, which drops its origin); 'claude': an agent's, untouched.
-  const drafts: Draft[] = [draft('mine'), draft('claude', { agent: 'Claude', turnId: 't' })];
+  const drafts: Draft[] = [draft('mine'), draft('claude', { agent: 'Claude' })];
   const added: { input: AgentDraftInput; origin: DraftOrigin }[] = [];
   const viewed: { paths: string[]; viewed: boolean }[] = [];
   const reveals: RevealTarget[] = [];
@@ -70,7 +70,7 @@ function fakeBridge() {
 
 async function connect(bridge: ReviewBridge) {
   const server = new McpServer({ name: 'pr-review', version: '1' });
-  registerReviewTools(server, bridge, () => ({ agent: 'Claude', turnId: 'turn-1' }));
+  registerReviewTools(server, bridge, () => ({ agent: 'Claude' }));
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
   const client = new Client({ name: 'test', version: '1' });
@@ -94,11 +94,20 @@ describe('PR Review MCP tools', () => {
       'get_pr',
       'list_drafts',
       'list_open_prs',
+      'offer_choices',
       'search_code',
       'set_viewed',
       'show_in_app',
       'update_draft',
     ]);
+  });
+
+  it('offer_choices takes a short question and up to four choices, and tells Claude to end its answer', async () => {
+    const { call } = await connect(fakeBridge().bridge);
+    const ok = await call('offer_choices', { question: 'Leave a comment?', choices: [{ label: 'Yes, leave a comment', prompt: 'Yes, write it.' }, { label: 'No', prompt: null }] });
+    expect(ok).toEqual({ isError: false, text: expect.stringContaining('End your answer now') });
+    const five = Array.from({ length: 5 }, (_, i) => ({ label: `c${i}`, prompt: null }));
+    expect((await call('offer_choices', { question: 'Too many?', choices: five })).isError).toBe(true);
   });
 
   it('set_viewed ticks changed files, and refuses files the pull request does not change', async () => {
@@ -166,7 +175,7 @@ describe('PR Review MCP tools', () => {
     const { call } = await connect(bridge);
     const res = await call('add_draft', { pr, path: 'src/a.ts', line: 4, start_line: 2, body: 'Why?' });
     expect(res.isError).toBe(false);
-    expect(added).toEqual([{ input: { path: 'src/a.ts', side: 'RIGHT', line: 4, startLine: 2, body: 'Why?' }, origin: { agent: 'Claude', turnId: 'turn-1' } }]);
+    expect(added).toEqual([{ input: { path: 'src/a.ts', side: 'RIGHT', line: 4, startLine: 2, body: 'Why?' }, origin: { agent: 'Claude' } }]);
   });
 
   it('add_draft rejects lines outside the diff with the commentable ranges, and files that did not change', async () => {

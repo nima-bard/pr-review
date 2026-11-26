@@ -5,6 +5,7 @@ import { changeColor, changeLetter, commentedPaths, strayThreads, threadsForFile
 import { FileIcon, FolderIcon } from '../../components/fileIcons';
 import { showFileMenu } from '../../components/fileMenu';
 import { cx, Icon, Segmented } from '../../components/ui';
+import { markdownPreview } from '../../../shared/markdownPreview';
 import { focusFile, openFileTab, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
 import { closestInTree, foldersOf } from './treeOrder';
 
@@ -387,7 +388,7 @@ export function FileTree({ snapshot }: { snapshot: PrSnapshot }) {
               </span>
               <span className="font-mono text-[10.5px] text-muted min-w-[26px] flex-none">{line}</span>
               <span className={cx('flex-1 min-w-0 truncate text-[12px]', t?.isResolved ? 'text-muted' : 'text-fg')}>
-                <span className="font-semibold text-strong">{first?.author ?? snapshot.viewer}</span> {(first?.body ?? d?.body ?? '').split('\n')[0]}
+                <span className="font-semibold text-strong">{first?.author ?? snapshot.viewer}</span> {markdownPreview(first?.body ?? d?.body ?? '')}
               </span>
               {tag && (
                 <span className={cx('px-1 rounded text-[10px] font-semibold flex-none', tag === 'draft' ? 'bg-info-bg text-info' : tag === 'lost' || tag === 'resolved' ? 'bg-chip text-soft' : 'bg-warn-bg text-warn')}>{tag}</span>

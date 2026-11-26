@@ -536,8 +536,8 @@ const SECTIONS: { id: SettingsSection; title: string; desc: string; icon: Octico
   },
   {
     id: 'agents',
-    title: 'Agents',
-    desc: 'Claude, or another coding agent, reviewing with you: reviews and questions about a line from the app, one conversation per pull request, and comments that arrive as suggestions.',
+    title: 'Claude',
+    desc: 'Claude reviewing with you: one Claude Code session per pull request, for reviews and questions about a line, which also opens in Claude Desktop and Claude Code. Its comments arrive as drafts.',
     icon: 'comment',
     page: () => <AgentsSettings />,
   },

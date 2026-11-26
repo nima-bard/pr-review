@@ -3,6 +3,7 @@ import type { CommentView, PrSnapshot, ThreadView } from '../../shared/model';
 import type { ContextMenuItem } from '../../shared/ipc';
 import { tierLabel, tierTone } from '../../shared/labels';
 import { isClaudeGenerated } from '../../shared/triage';
+import { markdownPreview } from '../../shared/markdownPreview';
 import { parseHunkSide } from '../../core/anchor/fuzzy';
 import { api, errorText } from '../api';
 import { Octicon } from '../components/octicons';
@@ -298,8 +299,11 @@ export function ThreadCard({
               )}
               <span className="truncate text-strong shrink-0 max-w-full">{thread.anchor.path.slice(dir.length)}</span>
             </span>
-            <span className="text-muted text-[12px] whitespace-nowrap flex-none">{threadLocation(thread)}</span>
+            <span className="text-link text-[12px] whitespace-nowrap flex-none">{threadLocation(thread)}</span>
           </button>
+          <IconButton label={`Go to ${thread.anchor.path}${thread.anchor.line !== undefined ? `:${thread.anchor.line}` : ''}`} onClick={() => focusFile(key, thread.anchor.path, thread.id)}>
+            <Icon name="external" size={13} />
+          </IconButton>
           {thread.isResolved ? (
             <span title="Resolved" className="grid place-items-center w-7 h-7 text-add flex-none">
               <Octicon name="check-circle" size={15} label="Resolved" />
@@ -327,7 +331,7 @@ export function ThreadCard({
             {thread.comments.some((c) => c.pending) && <Badge tone="info">Pending</Badge>}
             {!expanded && first && (
               <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">
-                <span className="text-fg font-semibold">{first.author}</span> {first.body.split('\n')[0]}
+                <span className="text-fg font-semibold">{first.author}</span> {markdownPreview(first.body)}
               </span>
             )}
           </div>

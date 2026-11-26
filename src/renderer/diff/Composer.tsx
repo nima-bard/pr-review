@@ -3,7 +3,7 @@ import type { Draft, PrSnapshot } from '../../shared/model';
 import { api, errorText } from '../api';
 import { Avatar, Badge, Button, cx, Segmented } from '../components/ui';
 import { askPrefix } from '../../shared/agents';
-import { askAgent, useAgentFor } from '../state/agents';
+import { askClaude, useClaudeSettings } from '../state/claude';
 import { requestComposer, updateUi, usePrUi } from '../state/ui';
 import { readUnsent, unsentKey, writeUnsent, type ComposerTarget } from '../state/unsent';
 import { CommentBody } from './CommentBody';
@@ -62,12 +62,12 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
     if (prompt) root.current?.scrollIntoView({ block: 'nearest' });
   }, [prompt]);
   const isDraftEdit = target.draftId !== undefined;
-  const agent = useAgentFor(snapshot.key);
-  // Comment, or ask the PR's agent about these lines; typing "/ask " or "/claude " at the start switches to asking.
+  const claudeOn = useClaudeSettings((s) => s.enabled);
+  // Comment, or ask Claude about these lines; typing "/ask " or "/claude " at the start switches to asking.
   const [mode, setMode] = useState<'comment' | 'ask'>('comment');
-  const asking = mode === 'ask' && agent !== undefined && !isDraftEdit;
+  const asking = mode === 'ask' && claudeOn && !isDraftEdit;
   const onText = (text: string) => {
-    const asked = agent && !isDraftEdit ? askPrefix(text) : null;
+    const asked = claudeOn && !isDraftEdit ? askPrefix(text) : null;
     if (asked !== null && /^\s*\/(ask|claude)\s/i.test(text)) {
       setMode('ask');
       setBody(asked);
@@ -75,7 +75,7 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
   };
   const ask = async () => {
     if (!body.trim()) return;
-    await askAgent(snapshot.key, { kind: 'lines', prompt: body, target: { path: target.path, side: target.side, startLine: target.startLine, endLine: target.endLine } }, false);
+    await askClaude(snapshot.key, { kind: 'lines', prompt: body, target: { path: target.path, side: target.side, startLine: target.startLine, endLine: target.endLine } }, false);
     finish();
   };
   const send = () => void (asking ? ask() : save());
@@ -109,12 +109,12 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
   const range = target.startLine === target.endLine ? `line ${target.endLine}` : `lines ${target.startLine}–${target.endLine}`;
   return (
     <div ref={root} className="max-w-[680px] rounded-[9px] bg-raised border border-accent overflow-hidden font-sans text-comment">
-      <div className={cx('flex items-center gap-2 px-3 border-b border-line-2 text-muted text-[12px]', agent && !isDraftEdit ? 'py-1.5' : 'py-2')}>
+      <div className={cx('flex items-center gap-2 px-3 border-b border-line-2 text-muted text-[12px]', claudeOn && !isDraftEdit ? 'py-1.5' : 'py-2')}>
         <span className="flex-1">
           {asking ? 'Ask about' : 'New comment on'} {target.side === 'LEFT' ? 'old ' : ''}
           {range}
         </span>
-        {agent && !isDraftEdit && (
+        {claudeOn && !isDraftEdit && (
           <Segmented<'comment' | 'ask'>
             label="Comment or ask"
             size="sm"
@@ -122,7 +122,7 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
             onChange={setMode}
             options={[
               { value: 'comment', label: 'Comment' },
-              { value: 'ask', label: `Ask ${agent.name}` },
+              { value: 'ask', label: 'Ask Claude' },
             ]}
           />
         )}
@@ -143,8 +143,8 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
           }}
           placeholder={
             asking
-              ? `Ask ${agent.name} about these lines, e.g. “Does this break our guidelines? If so, write a comment here.”`
-              : `Leave a comment (Markdown, \`\`\`suggestion blocks supported)${agent && !isDraftEdit ? '; start with /ask to ask instead' : ''}`
+              ? `Ask Claude about these lines, e.g. “Does this break our guidelines? If so, write a comment here.”`
+              : `Leave a comment (Markdown, \`\`\`suggestion blocks supported)${claudeOn && !isDraftEdit ? '; start with /ask to ask instead' : ''}`
           }
           className="resize-y px-2.5 py-2 rounded-[7px] bg-side border border-line-2 focus:border-accent outline-none"
         />
@@ -173,14 +173,14 @@ export function Composer({ snapshot, target }: { snapshot: PrSnapshot; target: C
         ) : (
           <div className="flex items-center gap-2">
             <span className="text-[11.5px] text-muted">
-              {asking ? `⌘⏎ sends it to ${agent.name}; a comment it writes goes into your review here` : `⌘⏎ or “${isDraftEdit ? 'Save draft' : 'Add review comment'}” puts it in your review`}
+              {asking ? '⌘⏎ sends it to Claude; a comment it writes goes into your review here' : `⌘⏎ or “${isDraftEdit ? 'Save draft' : 'Add review comment'}” puts it in your review`}
             </span>
             <span className="flex-1" />
             <Button size="sm" variant="ghost" onClick={finish}>
               Discard
             </Button>
             <Button size="sm" variant="primary" disabled={!body.trim()} onClick={send}>
-              {asking ? `Ask ${agent.name}` : isDraftEdit ? 'Save draft' : 'Add review comment'}
+              {asking ? 'Ask Claude' : isDraftEdit ? 'Save draft' : 'Add review comment'}
             </Button>
           </div>
         )}

@@ -1,69 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AgentConnector, McpStatus } from '../../../shared/model';
-import { AGENT_PRESETS, CONNECTOR_KINDS } from '../../../shared/agents';
+import type { ClaudeEffort, ClaudeModels, ClaudeSettings, McpStatus } from '../../../shared/model';
 import { api, errorText } from '../../api';
-import { Badge, Button, cx, ErrorBox, Select, Spinner } from '../../components/ui';
-import { setAgents } from '../../state/agents';
+import { Badge, Button, ErrorBox, Select, Spinner } from '../../components/ui';
+import { setClaudeSettings } from '../../state/claude';
 import { setSettingsStatus } from '../../state/settingsPage';
-
-const INPUT = 'h-8 px-2.5 rounded-md bg-side border border-line-2 focus:border-accent outline-none';
-
-function newConnector(from: Omit<AgentConnector, 'id'>): AgentConnector {
-  return { ...from, id: crypto.randomUUID() };
-}
-
-function ConnectorEditor({ connector, onChange, onDone }: { connector: AgentConnector; onChange(patch: Partial<AgentConnector>): void; onDone(): void }) {
-  const name = useRef<HTMLInputElement>(null);
-  useEffect(() => name.current?.focus(), []);
-  return (
-    <div className="flex flex-col gap-3 p-3 rounded-[9px] border border-info-line bg-panel">
-      <label className="flex flex-col gap-1">
-        <span className="text-[12px] font-semibold text-strong">Name</span>
-        <input ref={name} value={connector.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Claude" className={INPUT} />
-        <span className="text-[11.5px] text-muted">Shown on the buttons: “Review with {connector.name || '…'}”, “Ask {connector.name || '…'}”.</span>
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-[12px] font-semibold text-strong">Kind</span>
-        <Select value={connector.kind} onChange={(e) => onChange({ kind: e.target.value as AgentConnector['kind'] })} className="w-[320px]">
-          {Object.entries(CONNECTOR_KINDS).map(([kind, k]) => (
-            <option key={kind} value={kind}>
-              {k.label}
-            </option>
-          ))}
-        </Select>
-        <span className="text-[11.5px] text-muted">{CONNECTOR_KINDS[connector.kind].desc}</span>
-      </label>
-      {connector.kind === 'command' && (
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] font-semibold text-strong">Command</span>
-          <textarea
-            rows={2}
-            value={connector.command}
-            onChange={(e) => onChange({ command: e.target.value })}
-            spellCheck={false}
-            placeholder={'e.g. codex exec "$PR_PROMPT"'}
-            className="px-2.5 py-2 rounded-md bg-side border border-line-2 focus:border-accent outline-none font-mono text-[12.5px] resize-y"
-          />
-          <span className="text-[11.5px] text-muted">
-            Use <code className="font-mono">"$PR_PROMPT"</code> in double quotes. For its comments to go into your review, give the agent PR Review’s MCP server (below).
-          </span>
-        </label>
-      )}
-      {(connector.kind === 'claude-code' || connector.kind === 'claude-terminal') && (
-        <label className="flex flex-col gap-1">
-          <span className="text-[12px] font-semibold text-strong">Model</span>
-          <input value={connector.model} onChange={(e) => onChange({ model: e.target.value.trim() })} placeholder="(Claude Code's default)" spellCheck={false} className={cx(INPUT, 'w-[240px] font-mono text-[12.5px]')} />
-          <span className="text-[11.5px] text-muted">An alias (opus, sonnet) or a model id. Empty uses your Claude Code default.</span>
-        </label>
-      )}
-      <div>
-        <Button size="sm" variant="primary" onClick={onDone}>
-          Done
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 /** The MCP server: whether it runs, Claude Code's registration, the port, and the settings other clients need. */
 function McpServerBox({ port, onPort }: { port: number; onPort(port: number): void }) {
@@ -94,7 +34,7 @@ function McpServerBox({ port, onPort }: { port: number; onPort(port: number): vo
         {status.claudeCodeRegistered && <Badge tone="info">Connected to Claude Code</Badge>}
       </span>
       <span className="text-[12px] text-muted leading-relaxed">
-        Agents use it to read the pull requests open here and add draft comments to your review. It only listens on this Mac, asks for a token, and can’t post anything to GitHub.
+        Claude uses it to read the pull requests open here, add draft comments to your review and show things in the app. It only listens on this Mac, asks for a token, and can’t post anything to GitHub.
       </span>
       <code className="font-mono text-[12px] text-fg">{status.url}</code>
       {status.error && <ErrorBox message={status.error} />}
@@ -144,30 +84,82 @@ function McpServerBox({ port, onPort }: { port: number; onPort(port: number): vo
   );
 }
 
+const EFFORT_NAMES: Record<ClaudeEffort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+
 /**
- * Settings › Agents: the agents the app can ask (Claude first), and PR Review's MCP server, which gives agents the pull
- * requests and your review. Empty until you set one up; the agent buttons appear only then.
+ * The model and effort for questions asked in the app, from the models your Claude Code offers (its /model list) and
+ * the effort levels the chosen one supports. A saved model Claude Code doesn't list stays choosable.
+ */
+function ModelAndEffort({ claude, onChange }: { claude: ClaudeSettings; onChange(patch: Partial<ClaudeSettings>): void }) {
+  const [list, setList] = useState<ClaudeModels | null>(null);
+  useEffect(() => void api.claudeModels().then(setList), []);
+  if (!list) return <Spinner label="Asking Claude Code for its models…" />;
+  const models = [
+    ...(list.models.some((m) => m.value === '') ? [] : [{ value: '', name: 'Claude Code’s default', description: '', efforts: [] as ClaudeEffort[] }]),
+    ...list.models,
+    ...(claude.model && !list.models.some((m) => m.value === claude.model) ? [{ value: claude.model, name: claude.model, description: 'Saved earlier', efforts: [] as ClaudeEffort[] }] : []),
+  ];
+  const chosen = models.find((m) => m.value === claude.model);
+  const efforts = chosen?.efforts ?? [];
+  return (
+    <div className="flex flex-wrap gap-x-5 gap-y-3">
+      <label className="flex flex-col gap-1">
+        <span className="text-[12px] font-semibold text-strong">Model</span>
+        <Select
+          value={claude.model}
+          // A model without the chosen effort level goes back to its default effort.
+          onChange={(e) => {
+            const next = models.find((m) => m.value === e.target.value);
+            onChange({ model: e.target.value, ...(claude.effort && !next?.efforts.includes(claude.effort) ? { effort: '' } : {}) });
+          }}
+          className="w-[300px]"
+        >
+          {models.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.description ? `${m.name} · ${m.description}` : m.name}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[12px] font-semibold text-strong">Effort</span>
+        <Select value={efforts.includes(claude.effort as ClaudeEffort) ? claude.effort : ''} disabled={efforts.length === 0} onChange={(e) => onChange({ effort: e.target.value as ClaudeEffort | '' })} className="w-[180px]">
+          <option value="">The model’s default</option>
+          {efforts.map((e) => (
+            <option key={e} value={e}>
+              {EFFORT_NAMES[e]}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <span className="basis-full text-[11.5px] text-muted">
+        For questions asked in the app; Claude Desktop and Claude Code keep their own.{' '}
+        {list.fromClaudeCode ? 'The models your Claude Code offers.' : 'Claude Code’s own list couldn’t be read, so these are the current models.'}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Settings › Claude: Claude in the app (on or off, its model and effort), and PR Review's MCP server, which gives
+ * Claude the pull requests and your review.
  */
 export function AgentsSettings() {
-  const [connectors, setConnectors] = useState<AgentConnector[] | null>(null);
+  const [claude, setClaude] = useState<ClaudeSettings | null>(null);
   const [port, setPort] = useState(0);
-  const [parallel, setParallel] = useState(3);
-  const [editing, setEditing] = useState<string | null>(null);
   const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     void api.getSettings().then((s) => {
-      setConnectors(s.agents);
+      setClaude(s.claude);
       setPort(s.mcpPort);
-      setParallel(s.agentParallel);
     });
     void api.mcpStatus().then((s) => setClaudeInstalled(s.claudeInstalled));
   }, []);
 
   /** Saves these settings over the latest saved ones (the rest of Settings saves separately). */
-  const save = (patch: { agents?: AgentConnector[]; mcpPort?: number; agentParallel?: number }, wait = 400) => {
+  const save = (patch: { claude?: ClaudeSettings; mcpPort?: number }, wait = 400) => {
     setSettingsStatus('Saving…');
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
@@ -175,7 +167,7 @@ export function AgentsSettings() {
         try {
           const current = await api.getSettings();
           await api.saveSettings({ ...current, ...patch });
-          if (patch.agents) setAgents(patch.agents);
+          if (patch.claude) setClaudeSettings(patch.claude);
           setSettingsStatus('Saved');
         } catch (err) {
           setSettingsStatus(errorText(err));
@@ -184,129 +176,35 @@ export function AgentsSettings() {
     }, wait);
   };
 
-  if (!connectors) return null;
-  const update = (next: AgentConnector[], wait?: number) => {
-    setConnectors(next);
-    save({ agents: next }, wait);
+  if (!claude) return null;
+  const change = (patch: Partial<ClaudeSettings>, wait?: number) => {
+    const next = { ...claude, ...patch };
+    setClaude(next);
+    save({ claude: next }, wait);
   };
-  const change = (id: string, patch: Partial<AgentConnector>) => update(connectors.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-  const move = (index: number, by: number) => {
-    const next = [...connectors];
-    const [item] = next.splice(index, 1);
-    next.splice(index + by, 0, item!);
-    update(next);
-  };
-  const add = (from: Omit<AgentConnector, 'id'>) => {
-    const a = newConnector(from);
-    update([...connectors, a]);
-    setEditing(a.id);
-  };
-  /** One click: the Claude agent, and Claude Code connected to the MCP server (after a confirm). */
-  const setUpClaude = async () => {
-    setError(null);
-    if (!connectors.some((c) => c.kind === 'claude-code')) update([newConnector(AGENT_PRESETS[0]!), ...connectors], 0);
-    try {
-      await api.connectClaudeCode();
-    } catch (err) {
-      setError(errorText(err));
-    }
-  };
-  const hasClaude = connectors.some((c) => c.kind === 'claude-code');
 
   return (
     <div className="flex flex-col gap-4">
-      {!hasClaude && (
-        <div className="flex flex-col gap-2 p-3.5 rounded-[10px] bg-info-subtle border border-info-line">
-          <span className="font-semibold text-strong">Review with Claude</span>
-          <span className="text-[12.5px] text-fg leading-relaxed">
-            Claude reviews a pull request with your skills and guidelines, answers questions about a line, and keeps one conversation per pull request that you can open in Claude Desktop. Requests run straight away
-            on your Claude Code. Its comments go into your review as drafts; nothing goes to GitHub until you submit.
-          </span>
-          <span className="text-[12px] text-muted">Set up Claude also adds PR Review’s MCP server (“pr-review”) to your Claude Code settings for all projects.</span>
-          {claudeInstalled === false ? (
-            <span className="text-[12.5px] text-fg">
-              Claude Code isn’t installed.{' '}
-              <button type="button" onClick={() => void api.openExternal('https://code.claude.com/docs/en/setup')} className="text-link hover:underline cursor-pointer">
-                Install it
-              </button>
-              , then come back here.
-            </span>
-          ) : (
-            <Button variant="primary" className="w-fit" disabled={claudeInstalled === null} onClick={() => void setUpClaude()}>
-              Set up Claude
-            </Button>
-          )}
-          {error && <ErrorBox message={error} />}
-        </div>
-      )}
-      <div className="flex flex-col gap-2">
-        {connectors.length > 0 && <span className="text-[12px] text-muted">The first agent is the default for every pull request; the Agent panel switches one pull request to another.</span>}
-        {connectors.map((a, i) =>
-          editing === a.id ? (
-            <ConnectorEditor key={a.id} connector={a} onChange={(patch) => change(a.id, patch)} onDone={() => setEditing(null)} />
-          ) : (
-            <div key={a.id} className="flex items-start gap-2.5 px-3 py-2.5 rounded-[9px] border border-line-2 bg-panel">
-              <div className="flex-1 min-w-0 flex flex-col gap-1">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-semibold text-strong">{a.name || 'Untitled'}</span>
-                  <Badge tone="muted">{CONNECTOR_KINDS[a.kind].label}</Badge>
-                  {i === 0 && <Badge tone="info">Default</Badge>}
-                  {a.model && <Badge tone="muted">{a.model}</Badge>}
-                </div>
-                {a.kind === 'command' && (
-                  <code className="font-mono text-[12px] text-soft truncate" title={a.command}>
-                    {a.command || '(no command)'}
-                  </code>
-                )}
-              </div>
-              <Button size="sm" onClick={() => setEditing(a.id)}>
-                Edit
-              </Button>
-              <Button size="sm" variant="ghost" aria-label={`Move ${a.name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
-                ↑
-              </Button>
-              <Button size="sm" variant="ghost" aria-label={`Move ${a.name} down`} disabled={i === connectors.length - 1} onClick={() => move(i, 1)}>
-                ↓
-              </Button>
-              <Button size="sm" variant="ghost" aria-label={`Delete ${a.name}`} onClick={() => update(connectors.filter((x) => x.id !== a.id))}>
-                Delete
-              </Button>
-            </div>
-          ),
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[12px] text-muted">Add</span>
-        {AGENT_PRESETS.map((p) => (
-          <Button key={p.name} size="sm" variant="ghost" onClick={() => add(p)}>
-            {p.name}
-          </Button>
-        ))}
-      </div>
-      {connectors.length > 0 && (
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[13px] font-semibold text-strong">Requests at once</span>
-          <span className="flex items-center gap-2">
-            <input
-              type="number"
-              min={1}
-              max={8}
-              value={parallel}
-              onChange={(e) => {
-                const next = Math.min(8, Math.max(1, Math.round(Number(e.target.value)) || 1));
-                setParallel(next);
-                save({ agentParallel: next });
-              }}
-              className={cx(INPUT, 'w-[80px]')}
-            />
-            <span className="text-[12px] text-muted">per pull request</span>
-          </span>
-          <span className="text-[11.5px] text-muted leading-relaxed">
-            Ask again while Claude is still answering: one request uses the pull request’s session (the one Claude Desktop opens), the others run beside it as side branches that know the conversation so far.
-            Each uses the agent’s model above. More at once means more usage.
-          </span>
+      <div className="flex flex-col gap-2.5 p-3.5 rounded-[10px] border border-line-2 bg-card">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={claude.enabled} onChange={(e) => change({ enabled: e.target.checked }, 0)} />
+          <span className="font-semibold text-strong">Ask Claude about pull requests</span>
         </label>
-      )}
+        <span className="text-[12.5px] text-fg leading-relaxed">
+          Each pull request gets one Claude Code session, which is its conversation: questions on a line and what you type in the side panel go into it, and it opens in Claude Desktop or
+          Claude Code too. What you ask there shows in the app as well. Claude’s comments go into your review as drafts; nothing goes to GitHub until you submit. PR Review keeps no copy of the conversation.
+        </span>
+        {claudeInstalled === false && (
+          <span className="text-[12.5px] text-fg">
+            Claude Code isn’t installed.{' '}
+            <button type="button" onClick={() => void api.openExternal('https://code.claude.com/docs/en/setup')} className="text-link hover:underline cursor-pointer">
+              Install it
+            </button>
+            , then come back here.
+          </span>
+        )}
+        {claude.enabled && <ModelAndEffort claude={claude} onChange={(patch) => change(patch, 0)} />}
+      </div>
       <McpServerBox
         port={port}
         onPort={(next) => {

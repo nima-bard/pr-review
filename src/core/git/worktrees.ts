@@ -130,6 +130,11 @@ export async function moveOwnedDetached(path: string, headOid: string): Promise<
   return 'moved';
 }
 
+/** A worktree's own git folder (`.git/worktrees/<name>` for a linked one): never committed, and removed with it. */
+export async function gitDir(worktree: string): Promise<string> {
+  return (await git(worktree, ['rev-parse', '--absolute-git-dir'])).trim();
+}
+
 export async function removeWorktree(repo: string, path: string): Promise<void> {
   const target = canonicalPath(path);
   const wt = (await listWorktrees(repo)).find((w) => samePath(w.path, target));

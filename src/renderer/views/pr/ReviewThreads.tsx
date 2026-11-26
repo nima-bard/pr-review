@@ -7,6 +7,7 @@ import { threadLocation, ThreadCard } from '../../diff/ThreadCard';
 import { useFileContent } from '../../diff/useFileDiff';
 import { focusFile, updateUi } from '../../state/ui';
 import { isClaudeGenerated, isViewersWord } from '../../../shared/triage';
+import { markdownPreview } from '../../../shared/markdownPreview';
 
 export type ThreadGroup = 'needs-reply' | 'likely-addressed' | 'waiting' | 'others' | 'resolved';
 
@@ -135,7 +136,7 @@ function ThreadRow({ snapshot, thread, open, onToggle }: { snapshot: PrSnapshot;
           <span className="font-mono text-[11.5px] text-muted flex-none">{threadLocation(thread)}</span>
         </span>
         <span className="flex-1 min-w-0 truncate text-[12.5px] text-fg">
-          <span className="font-semibold text-strong">{first?.author}</span> {first?.body.split('\n')[0]}
+          <span className="font-semibold text-strong">{first?.author}</span> {markdownPreview(first?.body ?? '')}
         </span>
         {thread.anchor.locallyModified && <Badge tone="warn">Local edit</Badge>}
         {thread.isOutdated && !thread.anchor.locallyModified && <Badge tone="warn">Outdated</Badge>}
