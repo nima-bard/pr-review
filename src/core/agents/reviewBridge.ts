@@ -1,3 +1,4 @@
+import type { ViewedFailure } from '../github/reviews';
 import type { CodeSearchQuery, CodeSearchResult, DiffSide, Draft, DraftOrigin, FileDiffModel, PrSnapshot, RevealTarget } from '../../shared/model';
 
 export interface AgentDraftInput {
@@ -20,8 +21,8 @@ export interface ReviewBridge {
   addDraft(pr: string, input: AgentDraftInput, origin: DraftOrigin): Promise<Draft>;
   updateDraft(pr: string, id: string, body: string): Promise<Draft>;
   deleteDraft(pr: string, id: string): Promise<void>;
-  /** The user's Viewed checkboxes (GitHub keeps them for the user only). */
-  setViewed(pr: string, paths: string[], viewed: boolean): Promise<void>;
+  /** The user's Viewed checkboxes (GitHub keeps them for the user only); returns the files GitHub refused. */
+  setViewed(pr: string, paths: string[], viewed: boolean): Promise<ViewedFailure[]>;
   searchCode(pr: string, query: CodeSearchQuery): Promise<CodeSearchResult>;
   /** Every file in the PR head, for showing one the PR doesn't change. */
   allFiles(pr: string): Promise<string[]>;

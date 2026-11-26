@@ -589,7 +589,18 @@ export interface AgentTurn {
    * far, but whose question and answer aren't added to the session (nor to Claude Desktop's copy of it).
    */
   branch?: boolean;
+  /**
+   * Ran as a side branch because Claude Desktop was answering in the PR's session, or a terminal had it open: writing
+   * to it from the app too would split the conversation there. (Desktop's idle copy is closed instead, see
+   * `claimSession`.)
+   */
+  besideOpen?: OutsideClaude;
+  /** Asked in the PR's session outside the app (typed in Claude Desktop or a terminal) and read from its transcript. */
+  outside?: OutsideClaude;
 }
+
+/** Where else a PR's Claude Code session can be open. */
+export type OutsideClaude = 'desktop' | 'terminal';
 
 /** A PR's agent conversation: every request continues the same session. */
 export interface AgentSession {

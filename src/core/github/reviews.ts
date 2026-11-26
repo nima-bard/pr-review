@@ -1,6 +1,6 @@
 import type { Draft, EditableKind, ReviewEvent } from '../../shared/model';
 import type { DraftStore } from '../store/drafts';
-import type { GitHubClient } from './client';
+import { GitHubError, type GitHubClient } from './client';
 import {
   ADD_COMMENT,
   ADD_REPLY,
@@ -85,10 +85,41 @@ export async function setResolved(client: GitHubClient, threadId: string, resolv
   await client.graphql(resolved ? RESOLVE_THREAD : UNRESOLVE_THREAD, { threadId });
 }
 
-export async function setViewed(client: GitHubClient, prId: string, paths: readonly string[], viewed: boolean): Promise<void> {
+/** GitHub's passing failures (a 5xx, “Something went wrong”, a dropped connection): worth trying again shortly. */
+export function transientGitHubError(err: unknown): boolean {
+  if (err instanceof GitHubError && err.status !== undefined && err.status >= 500) return true;
+  return err instanceof Error && /Something went wrong|HTTP 5\d\d|timed? ?out|ECONNRESET|ETIMEDOUT|socket hang up/i.test(err.message);
+}
+
+/** A file GitHub didn't mark, and why. */
+export interface ViewedFailure {
+  path: string;
+  error: string;
+}
+
+/**
+ * Ticks (or unticks) each file's Viewed checkbox, one call per file as GitHub requires. A passing failure is tried
+ * again twice, a little later each time; a file that still fails is skipped, so one refusal doesn't stop the rest.
+ * Returns the files GitHub refused.
+ */
+export async function setViewed(client: GitHubClient, prId: string, paths: readonly string[], viewed: boolean, wait = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<ViewedFailure[]> {
+  const failed: ViewedFailure[] = [];
   for (const path of paths) {
-    await client.graphql(viewed ? MARK_FILE_VIEWED : UNMARK_FILE_VIEWED, { prId, path });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await client.graphql(viewed ? MARK_FILE_VIEWED : UNMARK_FILE_VIEWED, { prId, path });
+        break;
+      } catch (err) {
+        if (attempt < 2 && transientGitHubError(err)) {
+          await wait(1000 * 3 ** attempt);
+          continue;
+        }
+        failed.push({ path, error: err instanceof Error ? err.message : String(err) });
+        break;
+      }
+    }
   }
+  return failed;
 }
 
 export async function addPrComment(client: GitHubClient, prId: string, body: string): Promise<void> {

@@ -30,7 +30,7 @@ function fakeBridge() {
     key: 'github.com/o/r#1',
     details: { url: 'https://github.com/o/r/pull/1', title: 'T' },
     worktree: { path: '/wt' },
-    files: [{ path: 'src/a.ts' }, { path: 'db/orders.kusto' }],
+    files: [{ path: 'src/a.ts' }, { path: 'db/orders.kusto' }, { path: 'refused/x.kusto' }],
     threads: [{ id: 'thread-1', path: 'src/a.ts' }],
     drafts,
   } as unknown as PrSnapshot;
@@ -53,7 +53,11 @@ function fakeBridge() {
         1,
       );
     },
-    setViewed: async (_pr, paths, v) => void viewed.push({ paths, viewed: v }),
+    setViewed: async (_pr, paths, v) => {
+      viewed.push({ paths, viewed: v });
+      // GitHub keeps refusing anything under refused/.
+      return paths.filter((path) => path.startsWith('refused/')).map((path) => ({ path, error: 'GitHub: Something went wrong' }));
+    },
     searchCode: async (_pr, query) => {
       searches.push(query);
       return query.pattern === '(' ? { files: [], total: 0, truncated: false, error: 'Invalid regular expression' } : { files: [{ path: 'src/a.ts', matches: [{ line: 2, text: 'run()', ranges: [[0, 3]] }] }], total: 1, truncated: false, error: null };
@@ -107,6 +111,15 @@ describe('PR Review MCP tools', () => {
       { paths: ['db/orders.kusto'], viewed: true },
       { paths: ['src/a.ts'], viewed: false },
     ]);
+  });
+
+  it('set_viewed says which files GitHub refused, and fails only when it refused them all', async () => {
+    const { call } = await connect(fakeBridge().bridge);
+    expect(await call('set_viewed', { pr, paths: ['db/orders.kusto', 'refused/x.kusto'] })).toEqual({
+      isError: false,
+      text: 'Marked 1 of 2 files as viewed. GitHub refused 1 of 2, which stay as they were: refused/x.kusto (GitHub: Something went wrong). Try those again in a moment.',
+    });
+    expect(await call('set_viewed', { pr, paths: ['refused/x.kusto'] })).toMatchObject({ isError: true, text: expect.stringContaining('GitHub refused 1 of 1') });
   });
 
   it('search_code returns the matches, and shows them in the app only when asked', async () => {

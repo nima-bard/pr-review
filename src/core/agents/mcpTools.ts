@@ -222,8 +222,12 @@ function registerActionTools(server: McpServer, bridge: ReviewBridge): void {
         const unknown = paths.filter((p) => !changed.has(p));
         if (unknown.length > 0) return fail(`Not changed in this pull request: ${some(unknown)}. Only changed files have a Viewed checkbox (get_pr lists them).`);
         const unique = [...new Set(paths)];
-        await bridge.setViewed(pr, unique, viewed);
-        return text(`Marked ${unique.length} file${unique.length === 1 ? '' : 's'} as ${viewed ? 'viewed' : 'not viewed'}: ${some(unique)}.`);
+        const failed = await bridge.setViewed(pr, unique, viewed);
+        const state = viewed ? 'viewed' : 'not viewed';
+        const done = unique.filter((p) => !failed.some((f) => f.path === p));
+        if (failed.length === 0) return text(`Marked ${done.length} file${done.length === 1 ? '' : 's'} as ${state}: ${some(done)}.`);
+        const refused = `GitHub refused ${failed.length} of ${unique.length}, which stay as they were: ${some(failed.map((f) => f.path))} (${failed[0]!.error}). Try those again in a moment.`;
+        return done.length === 0 ? fail(refused) : text(`Marked ${done.length} of ${unique.length} files as ${state}. ${refused}`);
       }),
   );
 

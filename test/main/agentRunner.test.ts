@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { AppState } from '../../src/core/store/appState';
 import { AgentRunner } from '../../src/main/agents/agentRunner';
 import type { Connector, TurnContext } from '../../src/main/agents/connector';
-import type { AgentRequest } from '../../src/shared/model';
+import type { AgentRequest, OutsideClaude } from '../../src/shared/model';
 
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -34,14 +34,19 @@ function setup(parallel: number) {
       return { stop: () => resolve({ sessionId: null }), done };
     },
   };
+  /** Where the PR's session stays open outside the app once claimed, and its transcript as written so far. */
+  const outside: { open: OutsideClaude | null; transcript: string } = { open: null, transcript: '' };
   const runner = new AgentRunner({
     appState: new AppState(dir),
     emit: () => undefined,
     connector: () => claude,
     prepare: async () => ({ worktree: '/wt', env: { PR_NUMBER: '1', PR_TITLE: 'T' }, prompt: 'p' }),
     mcp: async () => ({ url: 'http://127.0.0.1:1/mcp', token: 't' }),
+    claimSession: async () => outside.open,
+    findTranscript: async () => '/transcript.jsonl',
+    readTranscript: async (_path, offset) => (outside.transcript.length > offset ? { text: outside.transcript.slice(offset), end: outside.transcript.length, restarted: false } : null),
   });
-  return { runner, starts };
+  return { runner, starts, outside };
 }
 
 const ask = (prompt: string): AgentRequest => ({ kind: 'prompt', prompt, target: null });
@@ -159,5 +164,39 @@ describe('AgentRunner', () => {
     await runner.ask(key, ask('again'));
     await vi.waitFor(() => expect(starts).toHaveLength(3));
     expect(starts[2]!.ctx.prompt).toContain('Asked: first');
+  });
+
+  it('runs beside the session while Claude Desktop is answering in it, so the conversation there is not split', async () => {
+    const { runner, starts, outside } = await withConversation();
+    outside.open = 'desktop';
+    await runner.ask(key, ask('while Desktop has it'));
+    await vi.waitFor(() => expect(starts).toHaveLength(2));
+    expect(starts[1]!.ctx).toMatchObject({ main: false, resume: true, fork: true, sessionId: starts[0]!.ctx.sessionId });
+    // The session isn't the app's to write to now, so Desktop can still be opened on it.
+    expect(await runner.desktopSession(key)).toBe(starts[0]!.ctx.sessionId);
+    starts[1]!.finish();
+    await vi.waitFor(async () => expect((await runner.session(key))?.turns.at(-1)).toMatchObject({ status: 'done', branch: true, besideOpen: 'desktop' }));
+    expect((await runner.session(key))?.sessionId).toBe(starts[0]!.ctx.sessionId);
+    // It didn't write to the session, so a copy Desktop loaded after the first request still has everything.
+    const first = Date.parse((await runner.session(key))!.turns[0]!.endedAt!);
+    expect(await runner.lastWrittenAt(key)).toBe(first);
+  });
+
+  it('shows what was asked in Claude Desktop, read from the transcript, in time order', async () => {
+    const { runner, outside } = await withConversation();
+    const line = (o: Record<string, unknown>) => `${JSON.stringify(o)}\n`;
+    outside.transcript =
+      line({ type: 'user', uuid: 'own', entrypoint: 'sdk-cli', turnOrigin: 'sdk', timestamp: '2000-01-01T00:00:00Z', message: { content: 'first' } }) +
+      line({ type: 'user', uuid: 'd1', entrypoint: 'claude-desktop', turnOrigin: 'human', timestamp: '2999-01-01T00:00:00Z', message: { content: 'Asked in Desktop' } }) +
+      line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Working on it' }], stop_reason: 'tool_use' } });
+    await runner.syncOutside(key);
+    const turn = (await runner.session(key))?.turns.at(-1);
+    expect(turn).toMatchObject({ id: 'outside-d1', outside: 'desktop', status: 'running', reply: 'Working on it', request: { prompt: 'Asked in Desktop' } });
+    outside.transcript += line({ type: 'assistant', timestamp: '2999-01-01T00:01:00Z', message: { content: [{ type: 'text', text: 'Done.' }], stop_reason: 'end_turn' } });
+    await runner.syncOutside(key);
+    const turns = (await runner.session(key))?.turns ?? [];
+    // The app's own request isn't added twice.
+    expect(turns.map((t) => t.outside ?? 'app')).toEqual(['app', 'desktop']);
+    expect(turns[1]).toMatchObject({ status: 'done', reply: 'Working on it\n\nDone.', endedAt: '2999-01-01T00:01:00Z' });
   });
 });

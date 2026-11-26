@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { GitHubClient } from '../../../src/core/github/client';
-import { submitReview, threadInput } from '../../../src/core/github/reviews';
+import { setViewed, submitReview, threadInput, transientGitHubError } from '../../../src/core/github/reviews';
+import { GitHubError } from '../../../src/core/github/client';
 import { normalizeQuery } from '../../../src/core/github/search';
 import { DraftStore } from '../../../src/core/store/drafts';
 import type { Draft } from '../../../src/shared/model';
@@ -118,5 +119,45 @@ describe('Claude batch placement', () => {
     const reply = 'Sure:\n[{"id":"T1","line":3,"confidence":0.8},{"id":"T1","line":99},{"id":"nope","line":1}]';
     expect(parsePlacements(reply, items)).toEqual([{ id: 'T1', line: 3, confidence: 0.8 }]);
     expect(parsePlacements('no json here', items)).toEqual([]);
+  });
+});
+
+describe('setViewed', () => {
+  /** GitHub failing `failures[path]` times for each file, with `error`, then marking it. */
+  function flaky(failures: Record<string, number>, error: () => Error) {
+    const calls: string[] = [];
+    const client = {
+      async graphql(_query: string, vars: Record<string, unknown>) {
+        const path = String(vars.path);
+        calls.push(path);
+        if ((failures[path] ?? 0) > 0) {
+          failures[path]!--;
+          throw error();
+        }
+        return {};
+      },
+    } as unknown as GitHubClient;
+    return { client, calls };
+  }
+  const noWait = async () => undefined;
+
+  it("tries GitHub's passing failures again, and carries on past a file it keeps refusing", async () => {
+    const { client, calls } = flaky({ 'b.kusto': 1, 'c.kusto': 9 }, () => new Error('GitHub: Something went wrong while executing your query'));
+    const failed = await setViewed(client, 'PR_1', ['a.kusto', 'b.kusto', 'c.kusto', 'd.kusto'], true, noWait);
+    expect(failed).toEqual([{ path: 'c.kusto', error: 'GitHub: Something went wrong while executing your query' }]);
+    // b once more; c three times in all; d still marked after c gave up.
+    expect(calls).toEqual(['a.kusto', 'b.kusto', 'b.kusto', 'c.kusto', 'c.kusto', 'c.kusto', 'd.kusto']);
+  });
+
+  it('does not try again what GitHub refuses for good', async () => {
+    const { client, calls } = flaky({ 'a.kusto': 1 }, () => new Error('GitHub: Resource not accessible by integration'));
+    expect(await setViewed(client, 'PR_1', ['a.kusto'], true, noWait)).toHaveLength(1);
+    expect(calls).toEqual(['a.kusto']);
+  });
+
+  it('counts server errors and dropped connections as passing', () => {
+    expect(transientGitHubError(new GitHubError('GitHub GraphQL request failed: HTTP 502', 502))).toBe(true);
+    expect(transientGitHubError(new Error('read ECONNRESET'))).toBe(true);
+    expect(transientGitHubError(new GitHubError('GitHub GraphQL request failed: HTTP 401', 401))).toBe(false);
   });
 });

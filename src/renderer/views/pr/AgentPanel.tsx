@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AgentTurn, PrSnapshot } from '../../../shared/model';
+import type { AgentTurn, OutsideClaude, PrSnapshot } from '../../../shared/model';
 import { requestLabel } from '../../../shared/agents';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Select, Spinner } from '../../components/ui';
@@ -7,6 +7,10 @@ import { askAgent, useAgentFor, useAgents } from '../../state/agents';
 import { loadAgentSession, useAgentSession } from '../../state/sessions';
 import { focusFile, updateUi, usePrUi } from '../../state/ui';
 import { openSettings } from '../../state/tabs';
+
+/** Where else a pull request's session can be open: after “In” or “Beside” on a badge, and in a sentence. */
+const OUTSIDE: Record<OutsideClaude, string> = { desktop: 'Claude Desktop', terminal: 'a terminal' };
+const OUTSIDE_NAME: Record<OutsideClaude, string> = { desktop: 'Claude Desktop', terminal: 'Claude Code in a terminal' };
 
 const STATUS: Record<AgentTurn['status'], { label: string; tone: 'muted' | 'info' | 'warn' | 'ok' | 'bad' }> = {
   queued: { label: 'Waiting', tone: 'muted' },
@@ -39,10 +43,24 @@ export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: Pr
         <span className="text-[12px] font-semibold text-strong truncate" title={requestLabel(turn.request)}>
           {turn.agent} · {requestLabel(turn.request, { fileName: true })}
         </span>
-        {turn.branch && (
-          <span className="inline-flex" title="Asked while another request was using this pull request's session, so it ran beside it: it knew the conversation so far, but this question and answer aren't in the session Claude Desktop opens.">
-            <Badge tone="purple">Side branch</Badge>
+        {turn.outside && (
+          <span className="inline-flex" title={`Asked in ${OUTSIDE_NAME[turn.outside]}, in this pull request’s session. PR Review reads it from the session as it happens.`}>
+            <Badge tone="info">In {OUTSIDE[turn.outside]}</Badge>
           </span>
+        )}
+        {turn.besideOpen ? (
+          <span
+            className="inline-flex"
+            title={`${turn.besideOpen === 'desktop' ? 'Claude Desktop was answering in' : 'Claude Code in a terminal has'} this pull request’s session, so this ran beside it rather than writing to it as well, which would split the conversation. It knew the conversation so far, but ${OUTSIDE_NAME[turn.besideOpen]} won’t show this question and answer.`}
+          >
+            <Badge tone="purple">Beside {OUTSIDE[turn.besideOpen]}</Badge>
+          </span>
+        ) : (
+          turn.branch && (
+            <span className="inline-flex" title="Asked while another request was using this pull request’s session, so it ran beside it: it knew the conversation so far, but this question and answer aren’t in the session Claude Desktop opens.">
+              <Badge tone="purple">Side branch</Badge>
+            </span>
+          )
         )}
         <span className="flex-1" />
         {target && (
@@ -54,7 +72,7 @@ export function TurnCard({ snapshot, turn, highlighted = false }: { snapshot: Pr
         )}
         {turn.status === 'running' ? <Spinner /> : null}
         <Badge tone={status.tone}>{status.label}</Badge>
-        {live && (
+        {live && !turn.outside && (
           <Button size="sm" variant="ghost" onClick={() => void api.stopAgentTurn(key, turn.id)}>
             {turn.status === 'queued' ? 'Cancel' : 'Stop'}
           </Button>
@@ -156,9 +174,10 @@ export function AgentPanel({ snapshot }: { snapshot: PrSnapshot }) {
     setError(null);
     action().catch((err: unknown) => setError(errorText(err)));
   };
-  const busy = turns.some((t) => t.status === 'running');
+  // Only the app's own requests: what runs in Claude Desktop or a terminal isn't the app's to wait for.
+  const busy = turns.some((t) => t.status === 'running' && !t.outside);
   // Only a request on the PR's own session keeps Claude Desktop from opening it; side branches don't write to it.
-  const sessionBusy = turns.some((t) => t.status === 'running' && !t.branch);
+  const sessionBusy = turns.some((t) => t.status === 'running' && !t.branch && !t.outside);
 
   return (
     <aside aria-label="Agent" className="w-[420px] flex-none flex flex-col bg-side border-l border-line min-h-0">

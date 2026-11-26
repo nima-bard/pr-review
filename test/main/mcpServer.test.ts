@@ -21,7 +21,7 @@ const bridge: ChannelBridge = {
     throw new Error('unused');
   },
   deleteDraft: async () => undefined,
-  setViewed: async () => undefined,
+  setViewed: async () => [],
   searchCode: async () => ({ files: [], total: 0, truncated: false, error: null }),
   allFiles: async () => [],
   reveal: () => undefined,

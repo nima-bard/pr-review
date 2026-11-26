@@ -39,6 +39,14 @@ export function describeTool(name: string, input: Record<string, unknown>): stri
       return 'Changed a draft';
     case 'mcp__pr-review__delete_draft':
       return 'Deleted a draft';
+    case 'mcp__pr-review__set_viewed': {
+      const n = Array.isArray(input.paths) ? input.paths.length : 0;
+      return `Marked ${n} file${n === 1 ? '' : 's'} as ${input.viewed === false ? 'not viewed' : 'viewed'}`;
+    }
+    case 'mcp__pr-review__search_code':
+      return `Searched for ${clip(str(input.query), 60)}${input.show === true ? ' in PR Review' : ''}`;
+    case 'mcp__pr-review__show_in_app':
+      return `Showed ${path || (input.thread_id ? 'a review thread' : 'a draft')}${input.line ? `:${String(input.line)}` : ''} in PR Review`;
     case 'Read':
       return `Read ${path}`;
     case 'Grep':

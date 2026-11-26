@@ -8,6 +8,7 @@ import { parsePrInput } from '../shared/prInput';
 import { GhTokenProvider } from '../core/github/auth';
 import { endpointsFor, GitHubClient } from '../core/github/client';
 import { fetchPrSummary, fetchViewer } from '../core/github/pr';
+import type { ViewedFailure } from '../core/github/reviews';
 import { inbox, searchPrs } from '../core/github/search';
 import { git } from '../core/git/exec';
 import { listWorktrees, removeWorktree, samePath } from '../core/git/worktrees';
@@ -30,7 +31,7 @@ import { claudeCode } from './agents/claudeCode';
 import { claudeTerminal } from './agents/claudeTerminal';
 import { commandConnector } from './agents/command';
 import { claudeBin, runWithTerminal, type Connector } from './agents/connector';
-import { openSession, showInDesktop } from './agents/claudeSessions';
+import { claimSession, endIdleDesktopProcess, findTranscript, openSession, readTranscript, showInDesktop } from './agents/claudeSessions';
 
 export interface RegistryHost {
   userDataDir: string;
@@ -58,6 +59,9 @@ export interface RegistryHost {
   /** Brings the window showing PR `key` to the front (its own window, or the main one). */
   showPr(key: string): void;
 }
+
+/** How often open PRs' session transcripts are read for what was asked outside the app. */
+const OUTSIDE_SYNC_MS = 3000;
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -112,8 +116,19 @@ export class SessionRegistry implements ChannelBridge {
         return { worktree: snap.worktree.path, env: actionEnv(snap), prompt: agentPrompt(snap, request, context) };
       },
       mcp: async () => ({ url: await this.mcpUrl(), token: await this.mcpTokens.get() }),
+      claimSession: (sessionId) => claimSession(sessionId),
+      findTranscript: (sessionId) => findTranscript(sessionId),
+      readTranscript: (path, offset) => readTranscript(path, offset),
     });
+    // What's asked in an open PR's session in Claude Desktop or a terminal shows in its Agent panel too.
+    this.outsideTimer = setInterval(() => {
+      for (const key of this.sessions.keys()) void this.agents.syncOutside(key).catch(() => undefined);
+    }, OUTSIDE_SYNC_MS);
+    this.outsideTimer.unref();
   }
+
+  /** Reads open PRs' session transcripts for what was asked outside the app. */
+  private readonly outsideTimer: NodeJS.Timeout;
 
   /** Starts the PR Review MCP server (again, after the port or token changed). */
   async startMcp(): Promise<void> {
@@ -175,13 +190,18 @@ export class SessionRegistry implements ChannelBridge {
     /** Opens the session; false when Claude Code says it no longer exists. */
     const open = async (): Promise<boolean> => {
       const id = await this.agents.desktopSession(key);
-      // Already open somewhere: Claude Code won't open it twice. In Desktop, switch to it there.
+      // Already open somewhere: Claude Code won't open it twice. In Desktop, switch to it there (or open it afresh).
       const holder = await openSession(id);
       if (holder?.desktopId) {
-        await showInDesktop(holder.desktopId);
-        return true;
+        // Desktop shows the conversation as its process loaded it. If the app has added to it since, close that copy
+        // while it's idle, so Desktop opens the session afresh, with everything; else just switch to it.
+        const stale = holder.startedAt !== null && (await this.agents.lastWrittenAt(key)) > holder.startedAt;
+        if (!stale || !(await endIdleDesktopProcess(holder))) {
+          await showInDesktop(holder.desktopId);
+          return true;
+        }
       }
-      if (holder) throw new Error('This pull request’s Claude session is open in Claude Code in a terminal. Run /desktop there to move it to Claude Desktop, or close it there and try again.');
+      if (holder && !holder.inDesktop) throw new Error('This pull request’s Claude session is open in Claude Code in a terminal. Run /desktop there to move it to Claude Desktop, or close it there and try again.');
       try {
         await runWithTerminal(claudeBin(), ['--desktop', '--resume', id], cwd);
         return true;
@@ -254,7 +274,7 @@ export class SessionRegistry implements ChannelBridge {
     return this.bridgeSession(pr).deleteDraft(id);
   }
 
-  setViewed(pr: string, paths: string[], viewed: boolean): Promise<void> {
+  setViewed(pr: string, paths: string[], viewed: boolean): Promise<ViewedFailure[]> {
     return this.bridgeSession(pr).setViewed(paths, viewed);
   }
 
@@ -274,6 +294,7 @@ export class SessionRegistry implements ChannelBridge {
 
   /** Stops the background quick actions and agent requests (the app is quitting). */
   stopActions(): void {
+    clearInterval(this.outsideTimer);
     this.actions.stopAll();
     this.agents.stopAll();
   }
@@ -492,7 +513,10 @@ export class SessionRegistry implements ChannelBridge {
       readFile: (key, rev, path) => this.session(key).readFile(rev, path),
       listAllFiles: (key) => this.session(key).listAllFiles(),
       searchCode: (key, query) => this.session(key).searchCode(query),
-      setViewed: (key, paths, viewed) => this.session(key).setViewed(paths, viewed),
+      setViewed: async (key, paths, viewed) => {
+        const failed = await this.session(key).setViewed(paths, viewed);
+        if (failed.length > 0) throw new Error(`GitHub didn’t mark ${failed.map((f) => f.path).join(', ')}: ${failed[0]!.error}`);
+      },
       saveDraft: (key, draft) => this.session(key).saveDraft(draft),
       deleteDraft: (key, id) => this.session(key).deleteDraft(id),
       deleteDrafts: (key, ids) => this.session(key).deleteDrafts(ids),

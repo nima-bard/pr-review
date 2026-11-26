@@ -110,6 +110,9 @@ interface WorktreeState {
   owned: boolean;
 }
 
+/** How often an author's worktree is checked for edits when it can't be watched. */
+const WORKTREE_POLL_MS = 5000;
+
 export class PrSession {
   readonly key: string;
   private snapshot: PrSnapshot | null = null;
@@ -124,6 +127,8 @@ export class PrSession {
   private readonly headAnchors = new Map<string, TrackedAnchor>();
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
+  /** Checks the worktree for edits every few seconds when it can't be watched (see `startWatching`). */
+  private worktreePoll: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private etag: string | null = null;
   private readonly aiCache = new Map<string, { line: number; confidence: number } | null>();
@@ -179,19 +184,29 @@ export class PrSession {
     this.deps.emit({ type: 'checked', at: new Date().toISOString() });
   }
 
-  /** Author mode: threads follow uncommitted edits in the author's checkout. */
+  /**
+   * Author mode: threads follow uncommitted edits in the author's checkout. A watcher can fail, at the start or later
+   * (macOS gives an app started from a terminal 256 open files, and a big checkout can use them up): then the
+   * worktree is checked every few seconds instead, rather than the error taking down the app.
+   */
   private startWatching(): void {
     const root = this.worktree?.path;
-    if (!root || this.watcher) return;
+    if (!root || this.watcher || this.worktreePoll) return;
     const ignored = /(^|\/)(\.git|node_modules|out|dist|bin|obj|\.next|coverage)(\/|$)/;
+    const poll = () => {
+      this.watcher?.close();
+      this.watcher = null;
+      this.worktreePoll ??= setInterval(() => void this.remapWorktree().catch(() => undefined), WORKTREE_POLL_MS);
+    };
     try {
       this.watcher = watch(root, { recursive: true }, (_event, file) => {
         if (!file || ignored.test(file.toString())) return;
         if (this.watchTimer) clearTimeout(this.watchTimer);
         this.watchTimer = setTimeout(() => void this.remapWorktree().catch(() => undefined), 400);
       });
+      this.watcher.on('error', poll);
     } catch {
-      this.watcher = null;
+      poll();
     }
   }
 
@@ -752,31 +767,44 @@ export class PrSession {
     this.deps.emit({ type: 'snapshot', snapshot: this.snapshot });
   }
 
-  async setViewed(paths: string[], viewed: boolean): Promise<void> {
+  /**
+   * Ticks (or unticks) the files' Viewed checkboxes, on screen at once and then on GitHub. Files GitHub refused go
+   * back to how they were, and are returned; the others stay marked.
+   */
+  async setViewed(paths: string[], viewed: boolean): Promise<reviews.ViewedFailure[]> {
     const snap = this.snapshot;
-    if (!snap) return;
+    if (!snap) return [];
     const previous = new Map<string, ViewedState>(snap.files.map((f) => [f.path, f.viewed]));
     const previousStates = new Map(this.viewedStates);
     for (const p of paths) this.viewedStates.set(p, viewed ? 'VIEWED' : 'UNVIEWED');
     this.update((s) => {
       for (const f of s.files) if (paths.includes(f.path)) f.viewed = viewed ? 'VIEWED' : 'UNVIEWED';
     });
+    let failed: reviews.ViewedFailure[];
     try {
-      await reviews.setViewed(this.deps.client, snap.details.id, paths, viewed);
-      const blobs = await this.deps.appState.viewedBlobs(this.key);
-      for (const p of paths) {
-        const sha = this.headBlobs.get(p);
-        if (viewed && sha) blobs[p] = sha;
-        else delete blobs[p];
-      }
-      await this.deps.appState.saveViewedBlobs(this.key, blobs);
+      failed = await reviews.setViewed(this.deps.client, snap.details.id, paths, viewed);
     } catch (err) {
-      this.viewedStates = previousStates;
-      this.update((s) => {
-        for (const f of s.files) f.viewed = previous.get(f.path) ?? f.viewed;
-      });
-      throw err;
+      failed = paths.map((path) => ({ path, error: err instanceof Error ? err.message : String(err) }));
     }
+    const refused = new Set(failed.map((f) => f.path));
+    if (refused.size > 0) {
+      for (const p of refused) {
+        const before = previousStates.get(p);
+        if (before) this.viewedStates.set(p, before);
+        else this.viewedStates.delete(p);
+      }
+      this.update((s) => {
+        for (const f of s.files) if (refused.has(f.path)) f.viewed = previous.get(f.path) ?? f.viewed;
+      });
+    }
+    const blobs = await this.deps.appState.viewedBlobs(this.key);
+    for (const p of paths.filter((x) => !refused.has(x))) {
+      const sha = this.headBlobs.get(p);
+      if (viewed && sha) blobs[p] = sha;
+      else delete blobs[p];
+    }
+    await this.deps.appState.saveViewedBlobs(this.key, blobs);
+    return failed;
   }
 
   /** Saves a draft from the app (yours: an agent's draft you edited comes without its origin). */
@@ -1014,6 +1042,7 @@ export class PrSession {
   dispose(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.watchTimer) clearTimeout(this.watchTimer);
+    if (this.worktreePoll) clearInterval(this.worktreePoll);
     this.watcher?.close();
     this.blobs.dispose();
   }
