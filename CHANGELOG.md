@@ -19,6 +19,7 @@
 - Going to a comment or line in a file you’d marked as viewed showed the folded file; it now unfolds it.
 - Marking several files as viewed stopped at the first one GitHub refused and put all of them back. GitHub’s passing errors are now tried again, and only the files it still refuses stay unmarked.
 - On a pull request you wrote, in a big checkout, the app could quit with “too many open files” when watching your edits failed. It now checks for edits every few seconds instead.
+- A suggested change in a posted comment showed as a padded table in a text font, without its indentation. It now reads like the one on drafts: code font, indentation kept, − and + beside the lines.
 
 ## 0.2.0
 

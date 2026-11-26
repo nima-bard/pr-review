@@ -316,11 +316,70 @@
 .markdown .blob-wrapper td.blob-num {
   display: none;
 }
+/*
+ * A posted suggested change, as GitHub's HTML has it: a "Suggested change" header and a table with a row per line,
+ * styled by GitHub's own classes, which aren't loaded here. Drawn like the app's box on drafts (`SuggestedChange`):
+ * code font, indentation kept, long lines wrapped, a − or + in the gutter.
+ */
+.markdown .js-suggested-changes-blob {
+  margin: 0.5em 0 1em;
+  overflow: hidden;
+  border: 1px solid var(--c-line-2);
+  border-radius: 6px;
+}
+.markdown .js-suggested-changes-blob > div:first-child {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-soft);
+  background: var(--c-raised-2);
+  border-bottom: 1px solid var(--c-line-2);
+}
+.markdown .js-suggested-changes-blob .blob-wrapper {
+  padding: 4px 0;
+}
+.markdown .js-suggested-changes-blob table {
+  display: table;
+  width: 100%;
+  margin: 0;
+}
+.markdown .js-suggested-changes-blob tr {
+  border: 0;
+  background: transparent;
+}
+.markdown .js-suggested-changes-blob td {
+  border: 0;
+}
+.markdown .js-suggested-changes-blob .blob-code-inner {
+  position: relative;
+  padding: 0 8px 0 20px;
+  font-family: var(--font-mono);
+  font-size: var(--code-font-size, 13px);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .markdown .js-suggested-changes-blob .blob-code-deletion {
   background: var(--c-del-soft);
 }
 .markdown .js-suggested-changes-blob .blob-code-addition {
   background: var(--c-add-soft);
+}
+.markdown .js-suggested-changes-blob .blob-code-marker-deletion::before,
+.markdown .js-suggested-changes-blob .blob-code-marker-addition::before {
+  position: absolute;
+  left: 0;
+  width: 20px;
+  text-align: center;
+  user-select: none;
+}
+.markdown .js-suggested-changes-blob .blob-code-marker-deletion::before {
+  content: '−';
+  color: var(--c-del);
+}
+.markdown .js-suggested-changes-blob .blob-code-marker-addition::before {
+  content: '+';
+  color: var(--c-add);
 }
 
 .markdown .mermaid-diagram {
