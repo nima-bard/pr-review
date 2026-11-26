@@ -226,6 +226,8 @@ const ICONS = {
   trash: 'M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5',
   sidebar: 'M2 3h12v10H2zM6 3v10',
   sliders: 'M2.5 4.5h11M2.5 11.5h11M10 3v3M6 10v3',
+  /** The return key (↵), for sending. */
+  enter: 'M13 3.5v4.5a2 2 0 0 1-2 2H3.5M6.5 7l-3 3 3 3',
 };
 
 export function Icon({ name, size = 14, className, rotate }: { name: keyof typeof ICONS; size?: number; className?: string; rotate?: number }) {

@@ -18,8 +18,9 @@ describe("a PR's Claude pointer", () => {
   it("lives in the worktree's own git folder, where git never sees it", async () => {
     const file = await claudePointerFile(worktree, 'github.com/o/r#7');
     expect(file).toBe(join(realpathSync(repo.dir), '.git', 'worktrees', 'pr-7', 'pr-review', 'github.com__o__r__7.json'));
-    await writeClaudePointer(file, { sessionId: 's1', hiddenMarkers: ['e1'], dismissedOffers: ['e2'] });
-    expect(await readClaudePointer(file)).toEqual({ sessionId: 's1', hiddenMarkers: ['e1'], dismissedOffers: ['e2'] });
+    const pointer = { sessionId: 's1', hiddenMarkers: ['e1'], dismissedOffers: ['e2'], modelChoice: { model: 'claude-fable-5-2', effort: 'high' as const } };
+    await writeClaudePointer(file, pointer);
+    expect(await readClaudePointer(file)).toEqual(pointer);
     expect(execFileSync('git', ['status', '--porcelain', '--ignored'], { cwd: worktree, encoding: 'utf8' })).toBe('');
   });
 
@@ -30,6 +31,6 @@ describe("a PR's Claude pointer", () => {
   });
 
   it('is empty before the first question, or when the file is unreadable', async () => {
-    expect(await readClaudePointer(join(repo.dir, 'missing.json'))).toEqual({ sessionId: null, hiddenMarkers: [], dismissedOffers: [] });
+    expect(await readClaudePointer(join(repo.dir, 'missing.json'))).toEqual({ sessionId: null, hiddenMarkers: [], dismissedOffers: [], modelChoice: null });
   });
 });

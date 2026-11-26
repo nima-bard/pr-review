@@ -538,6 +538,9 @@ export interface ClaudeSettings {
   effort: ClaudeEffort | '';
 }
 
+/** A model and effort to run Claude with (empty: Claude Code's default model, the model's default effort). */
+export type ClaudeModelChoice = Pick<ClaudeSettings, 'model' | 'effort'>;
+
 /** Claude Code's effort levels (`--effort`). */
 export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -629,6 +632,8 @@ export interface ClaudeView {
   hiddenMarkers: string[];
   /** Exchanges whose offered choices you declined (a choice without a prompt, like "No"). */
   dismissedOffers: string[];
+  /** The model and effort chosen in this conversation, or null for Settings › Claude's default. */
+  modelChoice: ClaudeModelChoice | null;
   /** Why the last attempt to reach Claude failed, until the next one. */
   error: string | null;
 }

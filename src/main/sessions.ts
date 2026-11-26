@@ -595,6 +595,7 @@ export class SessionRegistry implements ReviewBridge {
       openClaudeIn: (key, app) => this.openClaudeIn(key, app),
       hideAskMarker: (key, exchangeId) => this.claudeFor(key).hideMarker(exchangeId),
       dismissClaudeOffer: (key, exchangeId) => this.claudeFor(key).dismissOffer(exchangeId),
+      chooseClaudeModel: (key, choice) => this.claudeFor(key).chooseModel(choice),
       claudeModels: () => claudeModels(),
       mcpStatus: () => this.mcpStatus(),
       connectClaudeCode: () => this.connectClaudeCode(),

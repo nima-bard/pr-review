@@ -15,7 +15,7 @@ interface FakeProcess extends ClaudeProcess {
 
 /** A PR's Claude with a stand-in session (lines by id), pointer, and `claude` processes the test drives. */
 function setup(start: { sessionId?: string; exists?: boolean } = {}) {
-  let pointer: ClaudePointer = { sessionId: start.sessionId ?? null, hiddenMarkers: [], dismissedOffers: [] };
+  let pointer: ClaudePointer = { sessionId: start.sessionId ?? null, hiddenMarkers: [], dismissedOffers: [], modelChoice: null };
   const sessions = new Map<string, SessionLine[]>();
   if (start.sessionId && start.exists !== false) sessions.set(start.sessionId, []);
   let version = 0;
@@ -162,6 +162,23 @@ describe('PrClaude', () => {
     await vi.waitFor(() => expect(processes[1]?.sent).toHaveLength(1));
     expect(processes[0]!.calls).toContain('close');
     expect(processes[1]!.options).toMatchObject({ isNew: false, sessionId: 's1', model: 'claude-fable-5-2', effort: 'high' });
+  });
+
+  it('uses the model and effort chosen in the conversation over Settings, until it goes back to the default', async () => {
+    const { claude, processes, answer, pointer } = setup({ sessionId: 's1' });
+    await claude.chooseModel({ model: 'claude-haiku-5-5', effort: 'low' });
+    expect(pointer().modelChoice).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+    expect(claude.view().modelChoice).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+    claude.ask(ask('one'));
+    await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
+    expect(processes[0]!.options).toMatchObject({ model: 'claude-haiku-5-5', effort: 'low' });
+    answer(processes[0]!);
+    await vi.waitFor(() => expect(claude.view().exchanges).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 20));
+    await claude.chooseModel(null);
+    claude.ask(ask('two'));
+    await vi.waitFor(() => expect(processes[1]?.sent).toHaveLength(1));
+    expect(processes[1]!.options).toMatchObject({ model: '', effort: '' });
   });
 
   it('waits while Claude Desktop is answering in the session, and sends once it is free', async () => {

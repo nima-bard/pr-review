@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { askPrefix, asks, claudePrompt, claudeSystemPrompt, promptHeader, readPrompt, requestLabel, sessionTitle } from '../../src/shared/agents';
-import type { AgentRequest, ClaudeView, Exchange, PrSnapshot } from '../../src/shared/model';
+import { askPrefix, asks, claudePrompt, claudeSystemPrompt, modelChoice, modelLabel, modelMenuItems, promptHeader, readPrompt, requestLabel, sessionTitle } from '../../src/shared/agents';
+import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, PrSnapshot } from '../../src/shared/model';
 
 const snap = { key: 'github.com/o/r#7', details: { url: 'https://github.com/o/r/pull/7' }, worktree: { path: '/wt/pr-7' } } as unknown as PrSnapshot;
 const lines: AgentRequest = { kind: 'lines', prompt: ' Does this break our guidelines? ', target: { path: 'src/a.ts', side: 'RIGHT', startLine: 3, endLine: 5 } };
@@ -79,6 +79,7 @@ describe('asks', () => {
     waitingFor: null,
     hiddenMarkers: [],
     dismissedOffers: [],
+    modelChoice: null,
     error: null,
   });
 
@@ -105,5 +106,47 @@ describe('labels', () => {
     expect(sessionTitle('7', '')).toBe('PR #7');
     expect(sessionTitle(undefined, 'x')).toBeNull();
     expect(sessionTitle('1', 'x'.repeat(200))).toHaveLength(80);
+  });
+});
+
+describe('the conversation’s model picker', () => {
+  const models: ClaudeModel[] = [
+    { value: '', name: 'Default (recommended)', description: 'Opus 5.5 · Best for everyday, complex tasks', efforts: ['low', 'high', 'xhigh'] },
+    { value: 'claude-fable-5-2', name: 'Fable 5.2', description: 'Most capable', efforts: ['low', 'high'] },
+    { value: 'claude-haiku-4-5', name: 'Haiku 4.5', description: 'Fastest', efforts: [] },
+  ];
+  const ids = (items: ReturnType<typeof modelMenuItems>) => items.map((i) => (i === 'separator' ? '-' : `${i.id}${i.checked ? '*' : ''}${i.enabled === false ? '!' : ''}`));
+
+  it('shows the model and effort as Claude Desktop does, naming the default by what it is', () => {
+    expect(modelLabel(models, { model: '', effort: 'xhigh' })).toEqual({ model: 'Opus 5.5', effort: 'Extra' });
+    expect(modelLabel(models, { model: 'claude-fable-5-2', effort: '' })).toEqual({ model: 'Fable 5.2', effort: null });
+    expect(modelLabel(models, { model: 'claude-haiku-4-5', effort: 'high' })).toEqual({ model: 'Haiku 4.5', effort: null });
+  });
+
+  it('lists the models, the chosen one’s effort levels, and going back to Settings’ default', () => {
+    expect(ids(modelMenuItems(models, { model: 'claude-fable-5-2', effort: 'high' }, false))).toEqual([
+      'heading:model!',
+      'model:',
+      'model:claude-fable-5-2*',
+      'model:claude-haiku-4-5',
+      '-',
+      'heading:effort!',
+      'effort:',
+      'effort:low',
+      'effort:high*',
+      '-',
+      'default',
+    ]);
+    expect(ids(modelMenuItems(models, { model: 'claude-haiku-4-5', effort: '' }, true)).slice(-4)).toEqual(['heading:effort!', 'effort:*!', '-', 'default*!']);
+  });
+
+  it('turns a choice into the model and effort to use, keeping the effort only where the model has it', () => {
+    const c = { model: '', effort: 'xhigh' as const };
+    expect(modelChoice(models, c, 'model:claude-fable-5-2')).toEqual({ model: 'claude-fable-5-2', effort: '' });
+    expect(modelChoice(models, { model: '', effort: 'low' }, 'model:claude-fable-5-2')).toEqual({ model: 'claude-fable-5-2', effort: 'low' });
+    expect(modelChoice(models, c, 'effort:high')).toEqual({ model: '', effort: 'high' });
+    expect(modelChoice(models, c, 'default')).toBe('default');
+    expect(modelChoice(models, c, null)).toBeNull();
+    expect(modelChoice(models, c, 'effort:huge')).toBeNull();
   });
 });

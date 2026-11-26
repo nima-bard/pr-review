@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AgentRequest, ClaudeSettings } from '../../shared/model';
+import type { AgentRequest, ClaudeModels, ClaudeSettings } from '../../shared/model';
 import { api, errorText } from '../api';
 import { setSessionError } from './sessions';
 import { showSidePanel } from './ui';
@@ -13,6 +13,17 @@ export async function loadClaudeSettings(): Promise<void> {
 
 export function setClaudeSettings(settings: ClaudeSettings): void {
   useClaudeSettings.setState(settings);
+}
+
+let models: Promise<ClaudeModels> | null = null;
+
+/** The models Claude Code offers, asked once per run; the standard list it falls back on is asked for again next time. */
+export function loadClaudeModels(): Promise<ClaudeModels> {
+  models ??= api.claudeModels().then((list) => {
+    if (!list.fromClaudeCode) models = null;
+    return list;
+  });
+  return models;
 }
 
 /**

@@ -1,4 +1,5 @@
-import type { AgentRequest, ClaudeApp, ClaudeView, LineTarget, PrSnapshot } from './model';
+import type { ContextMenuItem } from './ipc';
+import type { AgentRequest, ClaudeApp, ClaudeEffort, ClaudeModel, ClaudeModelChoice, ClaudeView, LineTarget, PrSnapshot } from './model';
 
 /** The Claude apps a pull request's session opens in, by name. */
 export const CLAUDE_APPS: Record<ClaudeApp, { name: string }> = {
@@ -14,6 +15,65 @@ export function sessionTitle(number: string | undefined, title: string | undefin
   if (!number) return null;
   const name = `PR #${number}${title?.trim() ? ` · ${title.trim()}` : ''}`;
   return name.length > 80 ? `${name.slice(0, 79)}…` : name;
+}
+
+/** Claude Code's effort levels by name, as its /effort shows them. */
+export const EFFORT_NAMES: Record<ClaudeEffort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+
+/** The models to choose from: Claude Code's default (the empty model) first, and a saved model the list lacks kept. */
+export function modelChoices(models: readonly ClaudeModel[], saved: string): ClaudeModel[] {
+  return [
+    ...(models.some((m) => m.value === '') ? [] : [{ value: '', name: 'Claude Code’s default', description: '', efforts: [] }]),
+    ...models,
+    ...(saved && !models.some((m) => m.value === saved) ? [{ value: saved, name: saved, description: 'Saved earlier', efforts: [] }] : []),
+  ];
+}
+
+/**
+ * The model and effort in use, short, for the conversation's picker as Claude Desktop shows it: "Opus 5.5" and
+ * "Extra". Claude Code's default model is named by what it is when Claude Code says ("Opus 5.5 · Best for…").
+ */
+export function modelLabel(models: readonly ClaudeModel[], c: ClaudeModelChoice): { model: string; effort: string | null } {
+  const model = modelChoices(models, c.model).find((m) => m.value === c.model);
+  const defaultIs = c.model === '' && model?.description.includes(' · ') ? model.description.split(' · ')[0]! : null;
+  const name = c.model === '' ? (defaultIs ?? 'Default') : (model?.name ?? c.model);
+  const effort = c.effort && model?.efforts.includes(c.effort) ? (c.effort === 'xhigh' ? 'Extra' : EFFORT_NAMES[c.effort]) : null;
+  return { model: name, effort };
+}
+
+/**
+ * The conversation's model menu: the models, the chosen one's effort levels (none for a model without them), and going
+ * back to Settings › Claude's default (`fromSettings` says whether the conversation uses it now).
+ */
+export function modelMenuItems(models: readonly ClaudeModel[], c: ClaudeModelChoice, fromSettings: boolean): ContextMenuItem[] {
+  const choices = modelChoices(models, c.model);
+  const efforts = choices.find((m) => m.value === c.model)?.efforts ?? [];
+  return [
+    { id: 'heading:model', label: 'Model', enabled: false },
+    ...choices.map((m) => ({ id: `model:${m.value}`, label: m.name, checked: m.value === c.model })),
+    'separator',
+    { id: 'heading:effort', label: efforts.length > 0 ? 'Effort' : 'Effort (not for this model)', enabled: false },
+    { id: 'effort:', label: 'The model’s default', checked: !efforts.includes(c.effort as ClaudeEffort), enabled: efforts.length > 0 },
+    ...efforts.map((e) => ({ id: `effort:${e}`, label: EFFORT_NAMES[e], checked: c.effort === e })),
+    'separator',
+    { id: 'default', label: 'The default from Settings › Claude', checked: fromSettings, enabled: !fromSettings },
+  ];
+}
+
+/**
+ * What a choice in that menu makes: a model and effort, "default" (Settings › Claude's), or null for none. A model
+ * without the chosen effort level goes back to its default effort.
+ */
+export function modelChoice(models: readonly ClaudeModel[], c: ClaudeModelChoice, choice: string | null): ClaudeModelChoice | 'default' | null {
+  if (choice === 'default') return 'default';
+  if (choice?.startsWith('model:')) {
+    const model = modelChoices(models, c.model).find((m) => m.value === choice.slice('model:'.length));
+    if (!model) return null;
+    return { model: model.value, effort: c.effort && model.efforts.includes(c.effort) ? c.effort : '' };
+  }
+  const effort = choice?.startsWith('effort:') ? choice.slice('effort:'.length) : null;
+  if (effort === '' || (effort !== null && effort in EFFORT_NAMES)) return { model: c.model, effort: effort as ClaudeEffort | '' };
+  return null;
 }
 
 /** "/ask …" or "/claude …" typed in the composer: an ask, with the prefix (and quotes around the rest) removed. */

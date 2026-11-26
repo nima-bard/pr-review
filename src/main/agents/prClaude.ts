@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { buildConversation, type SessionLine } from '../../core/agents/conversation';
 import type { ClaudePointer } from '../../core/store/claudePointer';
-import type { AgentRequest, ClaudeApp, ClaudeSettings, ClaudeView, Exchange, PendingRequest } from '../../shared/model';
+import type { AgentRequest, ClaudeApp, ClaudeModelChoice, ClaudeSettings, ClaudeView, Exchange, PendingRequest } from '../../shared/model';
 import type { ClaudeProcess, ClaudeProcessOptions } from './claudeProcess';
 
 /** What Claude Code says when the session it's asked to resume no longer exists. */
@@ -13,8 +13,8 @@ export const IDLE_MS = 60_000;
 /** How often the session is read while nobody is answering in it (every tick while someone is). */
 const QUIET_REFRESH_MS = 3000;
 
-/** What the app's `claude` is started with from Settings › Claude: a change starts it again for the next question. */
-const runsWith = (s: ClaudeSettings): string => `${s.model}|${s.effort}`;
+/** What the app's `claude` is started with: a change starts it again for the next question. */
+const runsWith = (c: ClaudeModelChoice): string => `${c.model}|${c.effort}`;
 
 export interface PrClaudeDeps {
   /** The PR as loaded: its worktree, PR_* variables, the session's name, and the prompt for `request`. Throws while it loads. */
@@ -92,6 +92,7 @@ export class PrClaude {
       waitingFor: this.waitingFor,
       hiddenMarkers: this.pointer?.hiddenMarkers ?? [],
       dismissedOffers: this.pointer?.dismissedOffers ?? [],
+      modelChoice: this.pointer?.modelChoice ?? null,
       error: this.error,
     };
   }
@@ -140,6 +141,12 @@ export class PrClaude {
     const pointer = await this.loadPointer();
     if (pointer.hiddenMarkers.includes(exchangeId)) return;
     await this.savePointer({ ...pointer, hiddenMarkers: [...pointer.hiddenMarkers, exchangeId] });
+    this.publish();
+  }
+
+  /** The model and effort for this conversation's next questions; null goes back to Settings › Claude's. */
+  async chooseModel(choice: ClaudeModelChoice | null): Promise<void> {
+    await this.savePointer({ ...(await this.loadPointer()), modelChoice: choice });
     this.publish();
   }
 
@@ -213,6 +220,12 @@ export class PrClaude {
     this.process?.kill();
   }
 
+  /** The conversation's own model and effort, else Settings › Claude's. */
+  private async modelChoice(): Promise<ClaudeModelChoice> {
+    const [pointer, settings] = await Promise.all([this.loadPointer(), this.deps.settings()]);
+    return pointer.modelChoice ?? { model: settings.model, effort: settings.effort };
+  }
+
   private async loadPointer(): Promise<ClaudePointer> {
     this.pointer ??= await this.deps.pointer.read();
     return this.pointer;
@@ -254,7 +267,7 @@ export class PrClaude {
     const waiting = () => this.pending.filter((p) => p.state === 'waiting');
     if (waiting().length === 0 || this.disposed) return;
     try {
-      if (this.process && !this.turnActive && ((await this.writtenElsewhere()) || runsWith(await this.deps.settings()) !== this.runsWith)) await this.closeProcess();
+      if (this.process && !this.turnActive && ((await this.writtenElsewhere()) || runsWith(await this.modelChoice()) !== this.runsWith)) await this.closeProcess();
       if (!this.process && !(await this.startProcess(waiting()[0]!))) {
         this.publish();
         return;
@@ -311,15 +324,15 @@ export class PrClaude {
       this.changedAt = undefined;
     }
     this.error = null;
-    const [settings, mcp] = await Promise.all([this.deps.settings(), this.deps.mcp()]);
+    const [choice, mcp] = await Promise.all([this.modelChoice(), this.deps.mcp()]);
     const proc = this.deps.start({
       sessionId: id,
       isNew: !exists,
       title: ctx.title,
       cwd: ctx.worktree,
       env: ctx.env,
-      model: settings.model,
-      effort: settings.effort,
+      model: choice.model,
+      effort: choice.effort,
       systemPrompt: ctx.systemPrompt,
       mcp,
       onTurn: () => {
@@ -329,7 +342,7 @@ export class PrClaude {
       onResult: (error) => this.answered(error),
     });
     this.process = proc;
-    this.runsWith = runsWith(settings);
+    this.runsWith = runsWith(choice);
     this.outside = null;
     // It starts from the session as it is now.
     this.lastOwnMessage = exists ? this.lastMessage : null;

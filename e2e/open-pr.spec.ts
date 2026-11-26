@@ -370,6 +370,19 @@ test('Claude offers a follow-up as buttons under its answer, and a choice sends 
   // the session as it was, rather than writing on from what it had seen.
   const asked = (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.map((e) => e.asked);
   expect(asked).toEqual(['app', 'elsewhere', 'app', 'app']);
+
+  // Typing in the box and pressing Enter asks too, as in Claude Desktop.
+  const box = panel.getByRole('textbox', { name: 'Ask Claude' });
+  await box.fill('Thanks');
+  await box.press('Enter');
+  await expect(panel.getByText('Noted.')).toBeVisible({ timeout: 15_000 });
+  await expect(box).toHaveValue('');
+  // The conversation's own model and effort show under the box, and going back shows Settings' default again.
+  const picker = panel.getByRole('button', { name: 'Model and effort' });
+  await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, { model: 'claude-haiku-5-5', effort: 'low' }), key);
+  await expect(picker).toHaveText(/Haiku 5\.5\s*Low/);
+  await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, null), key);
+  await expect(picker).not.toHaveText(/Haiku/);
   await win.getByRole('button', { name: /^Comments/ }).click();
   await expect(win.getByRole('region', { name: 'Comments' })).toBeVisible();
   await expect(claude).toHaveAttribute('aria-pressed', 'false');

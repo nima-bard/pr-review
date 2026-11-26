@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { EFFORT_NAMES, modelChoices } from '../../../shared/agents';
 import type { ClaudeEffort, ClaudeModels, ClaudeSettings, McpStatus } from '../../../shared/model';
 import { api, errorText } from '../../api';
 import { Badge, Button, ErrorBox, Select, Spinner } from '../../components/ui';
-import { setClaudeSettings } from '../../state/claude';
+import { loadClaudeModels, setClaudeSettings } from '../../state/claude';
 import { setSettingsStatus } from '../../state/settingsPage';
 
 /** The MCP server: whether it runs, Claude Code's registration, the port, and the settings other clients need. */
@@ -84,21 +85,15 @@ function McpServerBox({ port, onPort }: { port: number; onPort(port: number): vo
   );
 }
 
-const EFFORT_NAMES: Record<ClaudeEffort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
-
 /**
  * The model and effort for questions asked in the app, from the models your Claude Code offers (its /model list) and
  * the effort levels the chosen one supports. A saved model Claude Code doesn't list stays choosable.
  */
 function ModelAndEffort({ claude, onChange }: { claude: ClaudeSettings; onChange(patch: Partial<ClaudeSettings>): void }) {
   const [list, setList] = useState<ClaudeModels | null>(null);
-  useEffect(() => void api.claudeModels().then(setList), []);
+  useEffect(() => void loadClaudeModels().then(setList), []);
   if (!list) return <Spinner label="Asking Claude Code for its models…" />;
-  const models = [
-    ...(list.models.some((m) => m.value === '') ? [] : [{ value: '', name: 'Claude Code’s default', description: '', efforts: [] as ClaudeEffort[] }]),
-    ...list.models,
-    ...(claude.model && !list.models.some((m) => m.value === claude.model) ? [{ value: claude.model, name: claude.model, description: 'Saved earlier', efforts: [] as ClaudeEffort[] }] : []),
-  ];
+  const models = modelChoices(list.models, claude.model);
   const chosen = models.find((m) => m.value === claude.model);
   const efforts = chosen?.efforts ?? [];
   return (
@@ -133,7 +128,7 @@ function ModelAndEffort({ claude, onChange }: { claude: ClaudeSettings; onChange
         </Select>
       </label>
       <span className="basis-full text-[11.5px] text-muted">
-        For questions asked in the app; Claude Desktop and Claude Code keep their own.{' '}
+        The default for questions asked in the app: each pull request’s conversation can choose its own, under the box you type in. Claude Desktop and Claude Code keep their own.{' '}
         {list.fromClaudeCode ? 'The models your Claude Code offers.' : 'Claude Code’s own list couldn’t be read, so these are the current models.'}
       </span>
     </div>

@@ -2,6 +2,7 @@ import type {
   ActionRun,
   AgentRequest,
   ClaudeApp,
+  ClaudeModelChoice,
   ClaudeModels,
   ClaudeView,
   AuthStatus,
@@ -136,6 +137,8 @@ export interface Api {
   hideAskMarker(key: string, exchangeId: string): Promise<void>;
   /** Declines the choices Claude offered after an exchange (a choice that sends nothing, like "No"). */
   dismissClaudeOffer(key: string, exchangeId: string): Promise<void>;
+  /** The model and effort for the PR's conversation from its next question; null goes back to Settings › Claude's. */
+  chooseClaudeModel(key: string, choice: ClaudeModelChoice | null): Promise<void>;
   /** The models (and their effort levels) Settings › Claude offers: Claude Code's own list when it can be read. */
   claudeModels(): Promise<ClaudeModels>;
   /** The PR Review MCP server: whether it runs, its URL, and whether Claude Code has it registered. */
@@ -237,6 +240,7 @@ export const API_METHODS = [
   'openClaudeIn',
   'hideAskMarker',
   'dismissClaudeOffer',
+  'chooseClaudeModel',
   'claudeModels',
   'mcpStatus',
   'connectClaudeCode',

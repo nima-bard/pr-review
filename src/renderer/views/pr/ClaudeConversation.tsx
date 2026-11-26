@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { asks as allAsks, CLAUDE_APPS, requestLabel, type Ask } from '../../../shared/agents';
-import type { ClaudeView, Exchange, PendingRequest, PrSnapshot } from '../../../shared/model';
+import { asks as allAsks, CLAUDE_APPS, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
+import type { ClaudeModel, ClaudeView, Exchange, PendingRequest, PrSnapshot } from '../../../shared/model';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Spinner } from '../../components/ui';
 import { ASK_STATUS } from '../../diff/AskCard';
-import { askClaude } from '../../state/claude';
+import { askClaude, loadClaudeModels, useClaudeSettings } from '../../state/claude';
 import { useClaudeView } from '../../state/sessions';
 import { focusFile, usePrUi } from '../../state/ui';
 
@@ -308,6 +308,37 @@ function TakeSessionBox({ view, run, keyOf, keys }: { view: ClaudeView; run(acti
 }
 
 /**
+ * The conversation's model and effort, under the box as Claude Desktop shows them ("Opus 5.5  Extra"): the models your
+ * Claude Code offers. A choice holds for this pull request's next questions; Settings › Claude has the default.
+ */
+function ModelPicker({ prKey, view, onError }: { prKey: string; view: ClaudeView | undefined; onError(message: string): void }) {
+  const settings = useClaudeSettings();
+  const [models, setModels] = useState<ClaudeModel[] | null>(null);
+  useEffect(() => void loadClaudeModels().then((list) => setModels(list.models)), []);
+  const own = view?.modelChoice ?? null;
+  const current = own ?? { model: settings.model, effort: settings.effort };
+  const label = models ? modelLabel(models, current) : null;
+  const open = async () => {
+    const list = models ?? (await loadClaudeModels()).models;
+    const choice = modelChoice(list, current, await api.contextMenu(modelMenuItems(list, current, own === null)));
+    if (choice) await api.chooseClaudeModel(prKey, choice === 'default' ? null : choice).catch((err: unknown) => onError(errorText(err)));
+  };
+  return (
+    <button
+      type="button"
+      aria-haspopup="menu"
+      aria-label="Model and effort"
+      title={`The model and effort for this pull request’s next questions${own ? '' : ' (the default from Settings › Claude)'}`}
+      onClick={() => void open()}
+      className="flex items-baseline gap-1.5 min-w-0 h-6 px-2 rounded-md text-[12px] hover:bg-raised cursor-pointer"
+    >
+      <span className="text-fg truncate">{label?.model ?? 'Model'}</span>
+      {label?.effort && <span className="text-muted flex-none">{label.effort}</span>}
+    </button>
+  );
+}
+
+/**
  * The side panel's conversation with Claude (⇧⌘A): the PR's Claude Code session as it is, whether you asked here, in
  * Claude Desktop or in Claude Code, and a box for new questions. Nothing is kept here: it's read from the session.
  * `shown`: it's on screen (it stays mounted while the panel shows the comments).
@@ -318,7 +349,15 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const list = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   const last = view?.exchanges.at(-1);
+  // The box grows with what you type, like Claude Desktop's (up to its max height, then it scrolls).
+  useLayoutEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
   // Follow the conversation as it grows, like a chat, and show the latest when the tab comes back.
   useLayoutEffect(() => {
     const el = list.current;
@@ -369,29 +408,38 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
           <ErrorBox message={(error ?? view?.error)!} />
         </div>
       )}
-      <div className="p-3 border-t border-line flex flex-col gap-2">
+      <div className="px-3 pt-2.5 pb-2 border-t border-line flex flex-col gap-1.5">
         {view && <TakeSessionBox view={view} run={run} keyOf={key} keys={shown} />}
         {status && <span className="text-[11.5px] text-muted">{status}</span>}
-        <textarea
-          rows={3}
-          aria-label="Ask Claude"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          // Enter sends and Shift+Enter starts a new line, as in Claude Desktop (not while an input method is composing).
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-            e.preventDefault();
-            void send();
-          }}
-          placeholder="Ask Claude about this pull request…"
-          className="resize-y px-2.5 py-2 rounded-[7px] bg-card border border-line-2 focus:border-accent outline-none text-[13px]"
-        />
-        <span className="flex items-center gap-2">
-          <span className="text-[11.5px] text-muted">⏎ to send · ⇧⏎ for a new line</span>
-          <span className="flex-1" />
-          <Button size="sm" variant="primary" disabled={!text.trim()} onClick={() => void send()}>
-            Send
-          </Button>
+        <div className="flex items-end gap-1 rounded-[14px] border border-line-2 bg-card focus-within:border-accent pl-3 pr-1.5 py-1.5">
+          <textarea
+            ref={input}
+            rows={2}
+            aria-label="Ask Claude"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            // Enter sends and Shift+Enter starts a new line, as in Claude Desktop (not while an input method is composing).
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              void send();
+            }}
+            placeholder="Ask Claude about this pull request…"
+            className="flex-1 min-w-0 resize-none bg-transparent outline-none text-[13px] leading-[1.45] py-1 max-h-[200px] overflow-y-auto"
+          />
+          <button
+            type="button"
+            aria-label="Send"
+            title="Send (⏎) · ⇧⏎ for a new line"
+            disabled={!text.trim()}
+            onClick={() => void send()}
+            className="grid place-items-center w-8 h-8 flex-none rounded-[9px] text-fg hover:bg-raised-2 disabled:text-faint disabled:hover:bg-transparent cursor-pointer disabled:cursor-default"
+          >
+            <Icon name="enter" size={16} />
+          </button>
+        </div>
+        <span className="flex justify-end -mr-1">
+          <ModelPicker prKey={key} view={view} onError={setError} />
         </span>
       </div>
     </>
