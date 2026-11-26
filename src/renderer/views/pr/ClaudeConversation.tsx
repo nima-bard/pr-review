@@ -1,14 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { asks as allAsks, CLAUDE_APPS, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
 import type { ContextMenuItem } from '../../../shared/ipc';
-import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, PendingRequest, PrSnapshot, ThreadView } from '../../../shared/model';
+import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, LineTarget, PendingRequest, PrSnapshot, ThreadView } from '../../../shared/model';
 import { markdownPreview } from '../../../shared/markdownPreview';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Spinner } from '../../components/ui';
 import { ASK_STATUS } from '../../diff/AskCard';
 import { askClaude, loadClaudeModels, useClaudeSettings } from '../../state/claude';
 import { useClaudeView } from '../../state/sessions';
-import { focusFile, updateUi, usePrUi } from '../../state/ui';
+import { focusFile, openFileTab, updateUi, usePrUi } from '../../state/ui';
+import { setViewContext, useViewContext } from '../../state/viewContext';
 
 /** How long Claude worked: "42s", "3m 5s". */
 export function duration(ms: number): string {
@@ -37,13 +38,16 @@ function useElapsed(from: string | null, to: string | null, live: boolean): numb
 function YourMessage({ snapshot, ask, highlighted, below }: { snapshot: PrSnapshot; ask: Ask; highlighted: boolean; below?: ReactNode }) {
   const { request } = ask;
   const prompt = request.prompt.trim();
-  // To the asked lines (their marker if it's still shown, else the file), or to the thread asked about.
+  // To the asked lines (their marker if it's still shown, else the file), the thread asked about, or the file's tab.
+  const file = request.kind === 'file' ? request.file : undefined;
   const goTo =
     request.kind === 'thread' && request.thread
       ? () => focusFile(snapshot.key, request.thread!.path, request.thread!.id)
       : request.kind === 'lines' && request.target
         ? () => focusFile(snapshot.key, request.target!.path, null, `ask-${ask.id}`)
-        : null;
+        : file
+          ? () => openFileTab(snapshot.key, file.path, snapshot.files.some((f) => f.path === file.path), false)
+          : null;
   return (
     <div className="self-end max-w-[88%] min-w-0 flex flex-col items-end gap-1">
       <div className={cx('min-w-0 max-w-full flex flex-col gap-1 px-3 py-2 rounded-[12px] rounded-br-[4px] bg-raised border transition-colors', highlighted ? 'border-accent' : 'border-line-2')}>
@@ -321,14 +325,26 @@ function threadTarget(t: ThreadView): AgentRequest['target'] {
   return { path: t.anchor.path, side: t.side, startLine: line, endLine: t.anchor.endLine ?? line };
 }
 
-/** The thread your next question is about, over the box: where it is and how it starts, with × to ask about nothing. */
+/** A chip under the box saying what your next question is about, with × to ask about the whole pull request instead. */
+function Reference({ title, icon, onRemove, removeLabel, children }: { title: string; icon: ReactNode; onRemove(): void; removeLabel: string; children: ReactNode }) {
+  return (
+    <div title={title} className="flex items-center gap-1.5 min-w-0 h-7 pl-2 pr-0.5 rounded-md bg-raised border border-line-2 text-[11.5px]">
+      <span className="text-muted flex-none">{icon}</span>
+      {children}
+      <button type="button" aria-label={removeLabel} title={removeLabel} onClick={onRemove} className="grid place-items-center w-6 h-6 flex-none ml-auto rounded text-muted hover:text-fg hover:bg-raised-2 cursor-pointer">
+        <Icon name="close" size={10} />
+      </button>
+    </div>
+  );
+}
+
+/** The thread your next question is about: where it is and how it starts. */
 function ThreadReference({ snapshot, thread, onRemove }: { snapshot: PrSnapshot; thread: ThreadView; onRemove(): void }) {
   const t = threadTarget(thread);
   const where = `${thread.anchor.path.split('/').at(-1)}${t ? `:${t.startLine === t.endLine ? t.endLine : `${t.startLine}–${t.endLine}`}` : ''}`;
   const first = thread.comments[0];
   return (
-    <div className="flex items-center gap-2 min-w-0 pl-2.5 pr-1 py-1 rounded-[9px] bg-raised border border-line-2 text-[12px]">
-      <Icon name="comment" size={12} className="text-muted" />
+    <Reference title="Your next question is about this conversation" icon={<Icon name="comment" size={12} />} onRemove={onRemove} removeLabel="Don’t ask about this thread">
       <button type="button" title={`Go to the thread on ${thread.anchor.path}`} onClick={() => focusFile(snapshot.key, thread.anchor.path, thread.id)} className="font-mono text-link hover:underline cursor-pointer flex-none">
         {where}
       </button>
@@ -339,10 +355,30 @@ function ThreadReference({ snapshot, thread, onRemove }: { snapshot: PrSnapshot;
           </>
         )}
       </span>
-      <button type="button" aria-label="Don’t ask about this thread" title="Don’t ask about this thread" onClick={onRemove} className="grid place-items-center w-6 h-6 flex-none ml-auto rounded-md text-muted hover:text-fg hover:bg-raised-2 cursor-pointer">
-        <Icon name="close" size={11} />
+    </Reference>
+  );
+}
+
+/** The lines your next question is about: selected in a diff, by their numbers or as text. */
+function LinesReference({ snapshot, target, onRemove }: { snapshot: PrSnapshot; target: LineTarget; onRemove(): void }) {
+  const lines = target.startLine === target.endLine ? String(target.startLine) : `${target.startLine}–${target.endLine}`;
+  return (
+    <Reference title="Your next question is about these lines, with the code and the comments on them" icon={<Icon name="file" size={12} />} onRemove={onRemove} removeLabel="Don’t ask about these lines">
+      <button type="button" title={`Go to ${target.path}`} onClick={() => focusFile(snapshot.key, target.path)} className="font-mono text-link hover:underline cursor-pointer min-w-0 truncate">
+        {target.path.split('/').at(-1)}:{lines}
       </button>
-    </div>
+      <span className="text-muted flex-none">{target.side === 'LEFT' ? 'selected, old version' : 'selected'}</span>
+    </Reference>
+  );
+}
+
+/** The file open in the tab you're on: your next question is about it, until you remove it or go to another tab. */
+function FileReference({ path, onRemove }: { path: string; onRemove(): void }) {
+  return (
+    <Reference title={`Your next question is about ${path}, the file open in this tab`} icon={<Icon name="file" size={12} />} onRemove={onRemove} removeLabel="Don’t ask about this file">
+      <span className="font-mono text-fg min-w-0 truncate">{path.split('/').at(-1)}</span>
+      <span className="text-muted flex-none">open</span>
+    </Reference>
   );
 }
 
@@ -431,9 +467,24 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
     const el = list.current;
     if (el && shown) el.scrollTop = el.scrollHeight;
   }, [shown, view?.exchanges.length, view?.pending.length, last?.reply, last?.activity.length]);
-  // "Ask Claude" on a thread: it shows over the box, which takes the focus.
-  const { focusAsk, claudeRef } = usePrUi(key);
-  const refThread = claudeRef ? snapshot.threads.find((t) => t.id === claudeRef.threadId) : undefined;
+  // "Ask Claude" on a thread: it shows over the box, which takes the focus. Without one, the box asks about what you're
+  // looking at in the diff: the lines you selected, or the thread you're in. Either way × asks about nothing.
+  const ui = usePrUi(key);
+  const { focusAsk, claudeRef } = ui;
+  const context = useViewContext(key);
+  const threadId = claudeRef?.threadId ?? (context?.kind === 'thread' ? context.threadId : null);
+  const refThread = threadId ? snapshot.threads.find((t) => t.id === threadId) : undefined;
+  const refLines = !claudeRef && context?.kind === 'lines' ? context.target : undefined;
+  // Otherwise the file open in the tab you're on (× ignores it until you go to another tab).
+  const activeTab = ui.contentTabs.find((t) => t.id === ui.activeContent);
+  const openFile = ui.view === 'files' && activeTab?.kind === 'file' ? activeTab.path : null;
+  const [ignoredFile, setIgnoredFile] = useState<string | null>(null);
+  useEffect(() => setIgnoredFile(null), [openFile]);
+  const refFile = !refThread && !refLines && openFile && openFile !== ignoredFile ? openFile : undefined;
+  const dropReference = () => {
+    updateUi(key, { claudeRef: null });
+    setViewContext(key, null);
+  };
   useEffect(() => {
     if (claudeRef && shown) input.current?.focus();
   }, [claudeRef, shown]);
@@ -451,10 +502,15 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
     if (!text.trim()) return;
     const request: AgentRequest = refThread
       ? { kind: 'thread', prompt: text, target: threadTarget(refThread), thread: { id: refThread.id, path: refThread.anchor.path } }
-      : { kind: 'prompt', prompt: text, target: null };
+      : refLines
+        ? { kind: 'lines', prompt: text, target: refLines }
+        : refFile
+          ? { kind: 'file', prompt: text, target: null, file: { path: refFile } }
+          : { kind: 'prompt', prompt: text, target: null };
     await askClaude(key, request);
     setText('');
-    updateUi(key, { claudeRef: null });
+    // Sent with the question: the next one is about the pull request again, until you select or open something else.
+    dropReference();
   };
   const run = (action: () => Promise<void>) => {
     setError(null);
@@ -488,7 +544,6 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
       <div className="px-3 pt-2.5 pb-2 border-t border-line flex flex-col gap-1.5">
         {view && <TakeSessionBox view={view} run={run} keyOf={key} keys={shown} />}
         {status && <span className="text-[11.5px] text-muted">{status}</span>}
-        {refThread && <ThreadReference snapshot={snapshot} thread={refThread} onRemove={() => updateUi(key, { claudeRef: null })} />}
         <div className="flex items-end gap-1 rounded-[14px] border border-line-2 bg-card focus-within:border-accent pl-3 pr-1.5 py-1.5">
           <textarea
             ref={input}
@@ -502,7 +557,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
               e.preventDefault();
               void send();
             }}
-            placeholder={refThread ? 'Ask Claude about this conversation…' : 'Ask Claude about this pull request…'}
+            placeholder={refThread ? 'Ask Claude about this conversation…' : refLines ? 'Ask Claude about these lines…' : refFile ? 'Ask Claude about this file…' : 'Ask Claude about this pull request…'}
             className="flex-1 min-w-0 resize-none bg-transparent outline-none! text-[13px] leading-[1.45] py-1 max-h-[200px] overflow-y-auto"
           />
           <button
@@ -516,9 +571,25 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
             <Icon name="enter" size={16} />
           </button>
         </div>
-        <span className="flex justify-end -mr-1">
-          <ModelBar prKey={key} view={view} onError={setError} />
-        </span>
+        {/* What the question is about (what you selected or are in, in the diff), then the model, effort and context. */}
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex-1 min-w-0 flex">
+            {refThread ? (
+              <ThreadReference snapshot={snapshot} thread={refThread} onRemove={dropReference} />
+            ) : refLines ? (
+              <LinesReference snapshot={snapshot} target={refLines} onRemove={dropReference} />
+            ) : refFile ? (
+              <FileReference path={refFile} onRemove={() => setIgnoredFile(refFile)} />
+            ) : (
+              <span className="text-[11.5px] text-faint truncate" title="Select lines in a diff, or click into a comment, and your question is about that">
+                About the whole pull request
+              </span>
+            )}
+          </div>
+          <span className="flex-none -mr-1">
+            <ModelBar prKey={key} view={view} onError={setError} />
+          </span>
+        </div>
       </div>
     </>
   );

@@ -230,6 +230,17 @@ const ICONS = {
   enter: 'M13 3.5v4.5a2 2 0 0 1-2 2H3.5M6.5 7l-3 3 3 3',
 };
 
+/** The title row of a side panel (Files, Search, Comments, Claude), as tall as the file tabs beside it, with its actions. */
+export function PanelTitle({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-1 h-[37px] pl-3 pr-1.5 border-b border-line flex-none">
+      <h2 className="text-[12.5px] font-semibold text-strong truncate">{title}</h2>
+      <span className="flex-1" />
+      {children}
+    </div>
+  );
+}
+
 export function Icon({ name, size = 14, className, rotate }: { name: keyof typeof ICONS; size?: number; className?: string; rotate?: number }) {
   return (
     <svg

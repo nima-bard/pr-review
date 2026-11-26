@@ -3,7 +3,7 @@ import type { SelectedLineRange } from '@pierre/diffs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import type { PrSnapshot } from '../../../shared/model';
-import { Button, cx, Icon, Kbd, Spinner } from '../../components/ui';
+import { Button, cx, Icon, Kbd, PanelTitle, Segmented, Spinner } from '../../components/ui';
 import { SHORTCUTS, useReviewKeys } from './useReviewKeys';
 import { commentedPaths, FileSection, FullFileDiff, strayThreads, threadsForFile } from '../../diff/FileSection';
 import { ThreadCard } from '../../diff/ThreadCard';
@@ -20,7 +20,11 @@ import { useFindInView } from '../../diff/useFindInView';
 import { FindBar } from './FindBar';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
-import { SidePanel } from './SidePanel';
+import { Octicon } from '../../components/octicons';
+import { useTextSelectionContext } from '../../diff/useTextSelectionContext';
+import { ActivityBar, ActivityCount, type Activity } from './ActivityBar';
+import { ClaudeSpinner, SidePanel, toggleSidePanel, useClaudeWorking, useSidePanelShows } from './SidePanel';
+import { useClaudeSettings } from '../../state/claude';
 
 async function showTabMenu(snapshot: PrSnapshot, id: string): Promise<void> {
   const key = snapshot.key;
@@ -52,52 +56,58 @@ function ContentTabs({ snapshot }: { snapshot: PrSnapshot }) {
   const ui = usePrUi(snapshot.key);
   const reorder = useTabReorder('files', ui.contentTabs.map((t) => t.id), (from, slot) => moveContentTab(snapshot.key, from, slot));
   return (
-    <div role="tablist" aria-label="Open files" {...reorder.rowProps} className="flex items-stretch bg-side border-b border-line overflow-x-auto flex-none">
-      {ui.contentTabs.map((t, index) => {
-        const active = t.id === ui.activeContent;
-        const marker = reorder.marker(index);
-        const label = t.kind === 'changes' ? 'All changes' : t.path.split('/').pop();
-        return (
-          <div
-            key={t.id}
-            {...reorder.tabProps(index)}
-            onMouseDown={(e) => e.button === 1 && e.preventDefault()}
-            onAuxClick={(e) => {
-              if (e.button === 1 && t.kind === 'file') closeContentTab(snapshot.key, t.id);
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              void showTabMenu(snapshot, t.id);
-            }}
-            className={cx(
-              'relative flex items-center border-r border-line',
-              active ? 'bg-bg text-strong after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent' : 'text-soft',
-              reorder.dragging === t.id && 'opacity-50',
-              marker && MARKER_CLASS[marker],
-            )}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => updateUi(snapshot.key, { activeContent: t.id })}
-              onDoubleClick={() => t.kind === 'file' && updateUi(snapshot.key, (u) => ({ contentTabs: u.contentTabs.map((x) => (x.id === t.id && x.kind === 'file' ? { ...x, preview: false } : x)) }))}
-              className={cx('flex items-center gap-2 h-9 pl-3.5 pr-2 whitespace-nowrap cursor-pointer', t.kind === 'file' && t.preview && 'italic')}
-              title={t.kind === 'file' ? t.path : undefined}
+    <div className="flex items-stretch bg-side border-b border-line flex-none">
+      <div role="tablist" aria-label="Open files" {...reorder.rowProps} className="flex items-stretch overflow-x-auto min-w-0 flex-1">
+        {ui.contentTabs.map((t, index) => {
+          const active = t.id === ui.activeContent;
+          const marker = reorder.marker(index);
+          const label = t.kind === 'changes' ? 'All changes' : t.path.split('/').pop();
+          return (
+            <div
+              key={t.id}
+              {...reorder.tabProps(index)}
+              onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+              onAuxClick={(e) => {
+                if (e.button === 1 && t.kind === 'file') closeContentTab(snapshot.key, t.id);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                void showTabMenu(snapshot, t.id);
+              }}
+              className={cx(
+                'relative flex items-center border-r border-line',
+                active ? 'bg-bg text-strong after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent' : 'text-soft',
+                reorder.dragging === t.id && 'opacity-50',
+                marker && MARKER_CLASS[marker],
+              )}
             >
-              {t.kind === 'changes' ? <Icon name="list" size={13} /> : <FileIcon path={t.path} size={14} />}
-              {label}
-              {t.kind === 'changes' && <span className="text-muted text-[12px]">{snapshot.files.length} files</span>}
-              {t.kind === 'file' && !t.changed && <span className="not-italic text-[11px] text-muted">read-only</span>}
-            </button>
-            {t.kind === 'file' && (
-              <button type="button" aria-label={`Close ${t.path}`} onClick={() => closeContentTab(snapshot.key, t.id)} className="grid place-items-center w-6 h-6 mr-1 rounded text-faint hover:text-fg hover:bg-raised cursor-pointer">
-                <Icon name="close" size={11} />
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => updateUi(snapshot.key, { activeContent: t.id })}
+                onDoubleClick={() => t.kind === 'file' && updateUi(snapshot.key, (u) => ({ contentTabs: u.contentTabs.map((x) => (x.id === t.id && x.kind === 'file' ? { ...x, preview: false } : x)) }))}
+                className={cx('flex items-center gap-2 h-9 pl-3.5 pr-2 whitespace-nowrap cursor-pointer', t.kind === 'file' && t.preview && 'italic')}
+                title={t.kind === 'file' ? t.path : undefined}
+              >
+                {t.kind === 'changes' ? <Icon name="list" size={13} /> : <FileIcon path={t.path} size={14} />}
+                {label}
+                {t.kind === 'changes' && <span className="text-muted text-[12px]">{snapshot.files.length} files</span>}
+                {t.kind === 'file' && !t.changed && <span className="not-italic text-[11px] text-muted">read-only</span>}
               </button>
-            )}
-          </div>
-        );
-      })}
+              {t.kind === 'file' && (
+                <button type="button" aria-label={`Close ${t.path}`} onClick={() => closeContentTab(snapshot.key, t.id)} className="grid place-items-center w-6 h-6 mr-1 rounded text-faint hover:text-fg hover:bg-raised cursor-pointer">
+                  <Icon name="close" size={11} />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {/* How the diffs are laid out, beside the tabs they're in (also in the View menu). */}
+      <div className="flex items-center px-2 flex-none">
+        <Segmented size="sm" label="Diff layout" value={ui.layout} onChange={(layout) => updateUi(snapshot.key, { layout })} options={[{ value: 'split', label: 'Split' }, { value: 'unified', label: 'Unified' }]} />
+      </div>
     </div>
   );
 }
@@ -336,32 +346,14 @@ function Content({ snapshot, active }: { snapshot: PrSnapshot; active: boolean }
   );
 }
 
-/** The left sidebar: the file tree, or Find in files (⌘⇧F). Both stay mounted, so each keeps its state. */
+/** The left sidebar: the file tree, or Find in files (⌘⇧F), chosen in the strip of icons beside it. Both stay mounted, so each keeps its state. */
 function Sidebar({ snapshot }: { snapshot: PrSnapshot }) {
   const key = snapshot.key;
   const sidebar = usePrUi(key).sidebar;
-  const tab = (id: 'files' | 'search', label: string, icon: 'file' | 'search', title: string) => (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={sidebar === id}
-      title={title}
-      onClick={() => updateUi(key, (u) => (id === 'search' ? { sidebar: id, searchFocusSeq: u.searchFocusSeq + 1 } : { sidebar: id }))}
-      className={cx(
-        'relative flex items-center gap-1.5 h-8 px-2.5 text-[12.5px] font-semibold cursor-pointer',
-        sidebar === id ? 'text-strong after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:bg-accent' : 'text-muted hover:text-fg',
-      )}
-    >
-      <Icon name={icon} size={13} />
-      {label}
-    </button>
-  );
   return (
-    <div className="h-full flex flex-col bg-side">
-      <div role="tablist" aria-label="Sidebar" className="flex gap-1 px-1.5 border-b border-line flex-none">
-        {tab('files', 'Files', 'file', 'Files (⇧⌘E)')}
-        {tab('search', 'Search', 'search', 'Find in files (⇧⌘F)')}
-      </div>
+    // data-sidebar: clicks in here keep the thread you've selected (going to another is a click here too).
+    <div data-sidebar className="h-full flex flex-col bg-side">
+      <PanelTitle title={sidebar === 'search' ? 'Search' : 'Files'} />
       <div className={cx('flex-1 min-h-0', sidebar !== 'files' && 'hidden')}>
         <FileTree snapshot={snapshot} />
       </div>
@@ -414,32 +406,77 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
   const [help, setHelp] = useState(false);
   const toggleHelp = useCallback(() => setHelp((h) => !h), []);
   useReviewKeys(snapshot, active && !help, toggleHelp);
+  const root = useRef<HTMLDivElement>(null);
+  useTextSelectionContext(snapshot.key, root, active);
   const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['side'] : [])];
   const layout = useDefaultLayout({ id: `files-${snapshot.role}`, panelIds });
+  const key = snapshot.key;
+  const claudeOn = useClaudeSettings((s) => s.enabled);
+  const commentsShown = useSidePanelShows(key, 'comments');
+  const claudeShown = useSidePanelShows(key, 'claude');
+  const working = useClaudeWorking(key);
+  const unresolved = snapshot.threads.filter((t) => !t.isResolved).length;
+  const sidebarShows = (id: 'files' | 'search') => ui.showTree && ui.sidebar === id;
+  const showSidebar = (id: 'files' | 'search') =>
+    updateUi(key, (u) => (sidebarShows(id) ? { showTree: false } : { showTree: true, sidebar: id, ...(id === 'search' ? { searchFocusSeq: u.searchFocusSeq + 1 } : {}) }));
+  const left: Activity[] = [
+    { id: 'files', label: 'Files', title: 'Files (⇧⌘E)', icon: <Icon name="file" size={20} />, active: sidebarShows('files'), onClick: () => showSidebar('files') },
+    { id: 'search', label: 'Search', title: 'Find in files (⇧⌘F)', icon: <Icon name="search" size={20} />, active: sidebarShows('search'), onClick: () => showSidebar('search') },
+  ];
+  const right: Activity[] = [
+    {
+      id: 'comments',
+      label: `Comments${unresolved > 0 ? `, ${unresolved} unresolved` : ''}`,
+      title: 'Review comments (⇧⌘C)',
+      icon: <Octicon name="comment-discussion" size={20} />,
+      active: commentsShown,
+      badge: unresolved > 0 ? <ActivityCount n={unresolved} /> : undefined,
+      onClick: () => toggleSidePanel(key, 'comments'),
+    },
+    ...(claudeOn
+      ? [
+          {
+            id: 'claude',
+            label: 'Claude',
+            title: 'The conversation with Claude about this pull request (⇧⌘A)',
+            icon: <Octicon name="comment-ai" size={20} />,
+            active: claudeShown,
+            badge: working ? <ClaudeSpinner /> : undefined,
+            onClick: () => toggleSidePanel(key, 'claude'),
+          },
+        ]
+      : []),
+  ];
   return (
     <>
-    {help && <CheatSheet onClose={() => setHelp(false)} />}
-    <Group orientation="horizontal" className="h-full" resizeTargetMinimumSize={GRAB_AREA} defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
-      {ui.showTree && (
-        <>
-          <Panel id="tree" defaultSize="22" minSize={200} maxSize="45">
-            <Sidebar snapshot={snapshot} />
-          </Panel>
-          <Separator className={SEPARATOR} />
-        </>
-      )}
-      <Panel id="content" minSize={420}>
-        <Content snapshot={snapshot} active={active} />
-      </Panel>
-      {ui.showPanel && (
-        <>
-          <Separator className={SEPARATOR} />
-          <Panel id="side" defaultSize="26" minSize={280} maxSize="45">
-            <SidePanel snapshot={snapshot} />
-          </Panel>
-        </>
-      )}
-    </Group>
+      {help && <CheatSheet onClose={() => setHelp(false)} />}
+      <div ref={root} className="h-full flex">
+        <ActivityBar label="Files and search" edge="left" items={left} />
+        <div className="flex-1 min-w-0">
+          <Group orientation="horizontal" className="h-full" resizeTargetMinimumSize={GRAB_AREA} defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+            {ui.showTree && (
+              <>
+                <Panel id="tree" defaultSize="22" minSize={200} maxSize="45">
+                  <Sidebar snapshot={snapshot} />
+                </Panel>
+                <Separator className={SEPARATOR} />
+              </>
+            )}
+            <Panel id="content" minSize={420}>
+              <Content snapshot={snapshot} active={active} />
+            </Panel>
+            {ui.showPanel && (
+              <>
+                <Separator className={SEPARATOR} />
+                <Panel id="side" defaultSize="26" minSize={280} maxSize="45">
+                  <SidePanel snapshot={snapshot} />
+                </Panel>
+              </>
+            )}
+          </Group>
+        </div>
+        <ActivityBar label="Comments and Claude" edge="right" items={right} />
+      </div>
     </>
   );
 }

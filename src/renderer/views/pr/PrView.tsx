@@ -8,16 +8,14 @@ import { MergeDialog } from '../../dialogs/MergeDialog';
 import { SubmitReviewDialog } from '../../dialogs/SubmitReviewDialog';
 import { showChanges, VersionsDialog } from '../../dialogs/VersionsDialog';
 import { setSessionError, useSessions } from '../../state/sessions';
-import { getPrUi, setPrefs, updateUi, usePrefs, usePrUi, type PrViewKind } from '../../state/ui';
-import { claudeMenuItems, viewMenuItems } from './viewMenus';
+import { updateUi, usePrUi, type PrViewKind } from '../../state/ui';
 import { CommitsView } from './CommitsView';
 import { RunsDialog, RunsIndicator } from './ActionRuns';
 import { showActionsMenu } from '../../state/quickActions';
 import { FilesView } from './FilesView';
 import { Overview } from './Overview';
-import { toggleSidePanel, useClaudeWorking, useSidePanelShows } from './SidePanel';
 import { useClaudeSettings } from '../../state/claude';
-import { loadClaudeView, useClaudeView } from '../../state/sessions';
+import { loadClaudeView } from '../../state/sessions';
 
 /** GitHub's state pill, plus the review decision when it says more than "review required". */
 function StateBadge({ pr }: { pr: PrPreview }) {
@@ -83,72 +81,6 @@ function MergeButton({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
-/** Shows or hides the review comments in the side panel, with how many threads are unresolved. */
-function CommentsButton({ snapshot }: { snapshot: PrSnapshot }) {
-  const key = snapshot.key;
-  const pressed = useSidePanelShows(key, 'comments');
-  const open = snapshot.threads.filter((t) => !t.isResolved).length;
-  return (
-    <Button aria-pressed={pressed} title="Review comments, in the side panel (⇧⌘C)" onClick={() => toggleSidePanel(key, 'comments')} className={cx(pressed && 'bg-chip-on!')}>
-      <Octicon name="comment-discussion" size={14} />
-      Comments
-      {open > 0 && <span className="px-1.5 rounded-full bg-chip text-[11px]">{open}</span>}
-    </Button>
-  );
-}
-
-/**
- * Claude, while it's on in Settings: the button shows or hides the conversation in the side panel, and its arrow opens
- * the pull request's session in Claude Desktop or Claude Code.
- */
-function ClaudeButton({ snapshot }: { snapshot: PrSnapshot }) {
-  const key = snapshot.key;
-  const on = useClaudeSettings((s) => s.enabled);
-  const pressed = useSidePanelShows(key, 'claude');
-  const working = useClaudeWorking(key);
-  const hasSession = Boolean(useClaudeView(key)?.sessionId);
-  if (!on) return null;
-  const openIn = async () => {
-    const choice = await api.contextMenu(claudeMenuItems(hasSession));
-    if (choice === 'open:desktop' || choice === 'open:terminal') await api.openClaudeIn(key, choice === 'open:desktop' ? 'desktop' : 'terminal').catch((err: unknown) => setSessionError(key, errorText(err)));
-  };
-  return (
-    <span className="inline-flex">
-      <Button aria-pressed={pressed} title="The conversation with Claude about this pull request, in the side panel (⇧⌘A)" onClick={() => toggleSidePanel(key, 'claude')} className={cx('rounded-r-none!', pressed && 'bg-chip-on!')}>
-        {working ? <span className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" aria-hidden="true" /> : <Icon name="comment" />}
-        Claude
-      </Button>
-      <Button
-        aria-label="Open in Claude Desktop or Claude Code"
-        aria-haspopup="menu"
-        title={hasSession ? 'Open this pull request’s session in Claude Desktop or Claude Code' : 'Ask Claude something first: the session starts with the first question'}
-        onClick={() => void openIn()}
-        className="rounded-l-none! border-l-0! px-2"
-      >
-        <Icon name="chevron" size={12} />
-      </Button>
-    </span>
-  );
-}
-
-/** The Files view's ⚙ menu: layout, word wrap and the side panels, like github.com's diff settings. */
-function ViewMenuButton({ snapshot }: { snapshot: PrSnapshot }) {
-  const key = snapshot.key;
-  const open = async () => {
-    const ui = getPrUi(key);
-    const { wordWrap } = usePrefs.getState();
-    const choice = await api.contextMenu(viewMenuItems({ layout: ui.layout, wordWrap, showTree: ui.showTree }));
-    if (choice === 'layout:split' || choice === 'layout:unified') updateUi(key, { layout: choice === 'layout:split' ? 'split' : 'unified' });
-    else if (choice === 'wrap') setPrefs({ wordWrap: !wordWrap });
-    else if (choice === 'tree') updateUi(key, { showTree: !ui.showTree });
-  };
-  return (
-    <Button aria-label="View options" aria-haspopup="menu" title="View options: layout, word wrap and the file tree" onClick={() => void open()} className="px-2">
-      <Octicon name="gear" size={14} />
-    </Button>
-  );
-}
-
 /** `snapshot` is undefined while the PR first loads: then only `pr` (a preview) is known. */
 function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | undefined; view: PrViewKind }) {
   const key = pr.key;
@@ -163,8 +95,9 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
     { value: 'commits', label: <>Commits {count(snapshot && d.commitCount)}</> },
   ];
   return (
-    <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
-      <div className="flex-[1_1_220px] min-w-0">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
+      {/* The view switch sits in the middle, so it stays put while the buttons beside it change with the view. */}
+      <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <StateBadge pr={pr} />
           <h1 className="text-[15px] font-semibold text-strong truncate min-w-0" title={d.title}>
@@ -179,35 +112,34 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
         </div>
       </div>
       <Segmented label="PR views" value={view} onChange={(v) => updateUi(key, { view: v })} options={views} />
-      {view === 'files' && snapshot && (
-        <>
-          <Button onClick={() => updateUi(key, { showVersions: true })}>
-            <span className="text-muted">Changes</span>
-            <span className="font-semibold">{ui.pendingCompare ?? snapshot.compare?.label ?? 'All changes'}</span>
-            {ui.pendingCompare ? <Spinner /> : <Icon name="chevron" size={12} />}
-          </Button>
-          {since && !ui.pendingCompare && (
-            <Button title={since.tooltip} onClick={() => showChanges(key, snapshot.lastReviewedOid, 'Since your last review')} className="bg-warn-bg! border-warn-line! text-warn! hover:brightness-110">
-              {since.action}
+      <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-2 min-w-0">
+        {view === 'files' && snapshot && (
+          <>
+            <Button onClick={() => updateUi(key, { showVersions: true })}>
+              <span className="text-muted">Changes</span>
+              <span className="font-semibold">{ui.pendingCompare ?? snapshot.compare?.label ?? 'All changes'}</span>
+              {ui.pendingCompare ? <Spinner /> : <Icon name="chevron" size={12} />}
             </Button>
-          )}
-          <ViewMenuButton snapshot={snapshot} />
-          <CommentsButton snapshot={snapshot} />
-        </>
-      )}
-      {/* The pull request's own actions are on the Overview; ⌥⌘1–9 run quick actions from anywhere. */}
-      {snapshot && view === 'overview' && (
-        <Button onClick={() => void showActionsMenu(snapshot)} title="Quick actions: your own commands for this pull request (⌥⌘1–9). Set them up in Settings.">
-          <Octicon name="zap" size={14} className="text-warn" />
-          Actions
+            {since && !ui.pendingCompare && (
+              <Button title={since.tooltip} onClick={() => showChanges(key, snapshot.lastReviewedOid, 'Since your last review')} className="bg-warn-bg! border-warn-line! text-warn! hover:brightness-110">
+                {since.action}
+              </Button>
+            )}
+          </>
+        )}
+        {/* The pull request's own actions are on the Overview; ⌥⌘1–9 run quick actions from anywhere. */}
+        {snapshot && view === 'overview' && (
+          <Button onClick={() => void showActionsMenu(snapshot)} title="Quick actions: your own commands for this pull request (⌥⌘1–9). Set them up in Settings.">
+            <Octicon name="zap" size={14} className="text-warn" />
+            Actions
+          </Button>
+        )}
+        {snapshot && view === 'overview' && d.state === 'OPEN' && (d.isDraft ? d.viewerCan.update : d.viewerCan.merge) && <MergeButton snapshot={snapshot} />}
+        <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
+          Submit review
+          {drafts > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{drafts} draft{drafts === 1 ? '' : 's'}</span>}
         </Button>
-      )}
-      {snapshot && view === 'overview' && d.state === 'OPEN' && (d.isDraft ? d.viewerCan.update : d.viewerCan.merge) && <MergeButton snapshot={snapshot} />}
-      {snapshot && <ClaudeButton snapshot={snapshot} />}
-      <Button variant="primary" disabled={!snapshot} title={snapshot ? undefined : 'Available once the pull request has loaded'} onClick={() => updateUi(key, { showSubmit: true })}>
-        Submit review
-        {drafts > 0 && <span className="px-1.5 rounded-full bg-black/20 text-[11.5px]">{drafts} draft{drafts === 1 ? '' : 's'}</span>}
-      </Button>
+      </div>
     </div>
   );
 }

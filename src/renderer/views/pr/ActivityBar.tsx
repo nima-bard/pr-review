@@ -1,0 +1,48 @@
+import type { ReactNode } from 'react';
+import { cx } from '../../components/ui';
+
+export interface Activity {
+  id: string;
+  /** What it shows, for screen readers (with its count, if any). */
+  label: string;
+  /** The tooltip, with its shortcut. */
+  title: string;
+  icon: ReactNode;
+  /** Its view is the one showing in the panel. */
+  active: boolean;
+  /** A count or a spinner in its corner. */
+  badge?: ReactNode;
+  onClick(): void;
+}
+
+/**
+ * A strip of icons along one edge of the Files view, like VS Code's activity bar: each shows its view in the panel on
+ * that side, and the one that's showing hides the panel again. `edge` is the window edge it sits on, which gets the mark
+ * beside the icon that's showing.
+ */
+export function ActivityBar({ label, edge, items }: { label: string; edge: 'left' | 'right'; items: Activity[] }) {
+  return (
+    <nav aria-label={label} className={cx('w-11 flex-none flex flex-col items-center py-1 bg-side border-line', edge === 'left' ? 'border-r' : 'border-l')}>
+      {items.map((a) => (
+        <button
+          key={a.id}
+          type="button"
+          aria-label={a.label}
+          aria-pressed={a.active}
+          title={a.title}
+          onClick={a.onClick}
+          className={cx('relative grid place-items-center w-11 h-11 cursor-pointer', a.active ? 'text-strong' : 'text-muted hover:text-fg')}
+        >
+          {a.active && <span aria-hidden="true" className={cx('absolute top-2 bottom-2 w-0.5 rounded-full bg-accent', edge === 'left' ? 'left-0' : 'right-0')} />}
+          {a.icon}
+          {a.badge && <span className="absolute bottom-1.5 right-1.5">{a.badge}</span>}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+/** A count in an activity icon's corner, like VS Code's. */
+export function ActivityCount({ n }: { n: number }) {
+  return <span className="grid place-items-center min-w-4 h-4 px-1 rounded-full bg-accent text-ink text-[10px] font-semibold leading-none">{n > 99 ? '99+' : n}</span>;
+}

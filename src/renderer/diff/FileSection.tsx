@@ -15,6 +15,7 @@ import { Composer, DraftCard } from './Composer';
 import { AskCard } from './AskCard';
 import { useClaudeView } from '../state/sessions';
 import { ThreadCard } from './ThreadCard';
+import { clearSelectedLines, setViewContext } from '../state/viewContext';
 import { StickyScrollbars } from './StickyScrollbars';
 import { loadFile, useFileDiff } from './useFileDiff';
 import { useFocusLine } from './useFocusLine';
@@ -102,6 +103,17 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
   useEffect(() => {
     if (!composerOpen) setSelection(null);
   }, [composerOpen]);
+  // Selected lines are what the Claude box asks about next (as you drag, too), until they're unselected.
+  useEffect(() => {
+    if (!selection) {
+      clearSelectedLines(key, file.path);
+      return;
+    }
+    const side: DiffSide = selection.side === 'deletions' ? 'LEFT' : 'RIGHT';
+    const startLine = Math.min(selection.start, selection.end);
+    const endLine = Math.max(selection.start, selection.end);
+    setViewContext(key, { kind: 'lines', target: { path: file.path, side, startLine, endLine } });
+  }, [key, file.path, selection]);
   /** A click in the code (not the line-number gutter) clears the line selection, and with it the "+". */
   // In a file tab, a search result's line is selected and scrolled to.
   const body = useRef<HTMLDivElement>(null);
@@ -217,7 +229,7 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
   if (loading && !data) return <div className="px-4 py-3"><Spinner label="Loading diff…" /></div>;
   if (error) return <div className="px-4 py-3 text-del">{error}</div>;
   return (
-    <div ref={body} onClick={clearSelectionOnCodeClick}>
+    <div ref={body} data-diff-path={file.path} onClick={clearSelectionOnCodeClick}>
       {outside.length > 0 && (
         <div className="flex flex-col gap-2 px-3 py-2.5 bg-inset border-b border-line">
           <div className="text-[11.5px] text-muted">Comments not on a line shown in this diff</div>

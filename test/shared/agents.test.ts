@@ -161,3 +161,24 @@ describe('the conversation’s model picker', () => {
     expect(modelChoice(models, c, 'effort:huge')).toBeNull();
   });
 });
+
+describe('a question about the file open in a tab', () => {
+  const request = { kind: 'file' as const, prompt: 'What does this file do?', target: null, file: { path: 'src/billing/rate.ts' } };
+
+  it('says which file in its header and context, and is read back from the session as it was', () => {
+    const p = claudePrompt(request);
+    expect(p.split('\n')[0]).toBe('PR Review · file src/billing/rate.ts');
+    expect(p).toContain('The file src/billing/rate.ts, which the user has open in PR Review');
+    expect(p).toContain('add_draft (path "src/billing/rate.ts"');
+    expect(readPrompt(p)).toEqual(request);
+  });
+
+  it('is labelled with the file, or only its name in a header', () => {
+    expect(requestLabel(request)).toBe('src/billing/rate.ts');
+    expect(requestLabel(request, { fileName: true })).toBe('rate.ts');
+  });
+
+  it('is explained in the system prompt', () => {
+    expect(claudeSystemPrompt(snap)).toContain('"PR Review · file <path>"');
+  });
+});

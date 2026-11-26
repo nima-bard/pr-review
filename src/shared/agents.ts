@@ -102,6 +102,9 @@ export function requestLabel(request: AgentRequest, { fileName = false } = {}): 
     const path = fileName ? (request.thread.path.split('/').at(-1) ?? request.thread.path) : request.thread.path;
     return `Thread on ${path}${t ? `:${t.startLine === t.endLine ? t.endLine : `${t.startLine}–${t.endLine}`}` : ''}`;
   }
+  if (request.kind === 'file' && request.file) {
+    return fileName ? (request.file.path.split('/').at(-1) ?? request.file.path) : request.file.path;
+  }
   if (request.kind === 'lines' && request.target) {
     const t = request.target;
     const lines = t.startLine === t.endLine ? `${t.endLine}` : `${t.startLine}–${t.endLine}`;
@@ -146,11 +149,13 @@ export function promptHeader(request: AgentRequest): string {
     const t = request.target;
     return `PR Review · ${t.path}, ${t.side === 'LEFT' ? 'old' : 'new'} lines ${t.startLine}–${t.endLine}`;
   }
+  if (request.kind === 'file' && request.file) return `PR Review · file ${request.file.path}`;
   return 'PR Review · request';
 }
 
 const HEADER = /^PR Review · (?:(request)|(.+), (new|old) lines (\d+)–(\d+))$/;
 const THREAD_HEADER = /^PR Review · thread (\S+) on (.+?)(?:, (new|old) lines (\d+)–(\d+))?$/;
+const FILE_HEADER = /^PR Review · file (.+)$/;
 
 /** The request a prompt in the session came from, when PR Review sent it (its header); null for one typed elsewhere. */
 export function readPrompt(text: string): AgentRequest | null {
@@ -163,6 +168,8 @@ export function readPrompt(text: string): AgentRequest | null {
     const target = t[3] ? { path: t[2]!, side: t[3] === 'old' ? ('LEFT' as const) : ('RIGHT' as const), startLine: Number(t[4]), endLine: Number(t[5]) } : null;
     return { kind: 'thread', prompt, target, thread: { id: t[1]!, path: t[2]! } };
   }
+  const f = FILE_HEADER.exec(first.trim());
+  if (f) return { kind: 'file', prompt, target: null, file: { path: f[1]! } };
   const m = HEADER.exec(first.trim());
   if (!m) return null;
   if (m[1]) return { kind: 'prompt', prompt, target: null };
@@ -179,7 +186,7 @@ export function claudeSystemPrompt(snapshot: PrSnapshot): string {
   const { key, details, worktree } = snapshot;
   return [
     `You are working inside PR Review, the macOS app where the user reviews GitHub pull request ${details.url} (PR Review key "${key}"). It is checked out at ${worktree.path}, your working directory: use it instead of creating another worktree.`,
-    `Prompts from PR Review start with a header: "PR Review · request", "PR Review · <path>, new|old lines A–B" for a question about those lines, or "PR Review · thread <id> on <path>…" for one about a review thread. After the user's words, "${CONTEXT}" gives the thread, the lines' code, the review comments on them and where a new comment there goes.`,
+    `Prompts from PR Review start with a header: "PR Review · request", "PR Review · <path>, new|old lines A–B" for a question about those lines, "PR Review · thread <id> on <path>…" for one about a review thread, or "PR Review · file <path>" for one about the file the user has open. After the user's words, "${CONTEXT}" gives the thread, the lines' code, the review comments on them and where a new comment there goes.`,
     'How to respond: decide from each request whether it asks a question, asks you to do something in PR Review, or asks for a review comment.',
     '- A question, or a request to check, investigate or explain something: answer it in your reply only. Do not add a review comment, even if you find a problem: describe it in the answer, and the user can ask for a comment.',
     '- A request to do something in PR Review (mark files as viewed, show or find a file, a line, a comment or where something is): do it with the pr-review tools (set_viewed, show_in_app, search_code with show), then say in one line what you did. get_pr lists the files, which are viewed, and the review threads.',
@@ -200,6 +207,14 @@ function linesContext(t: LineTarget, context: LineContext | null): string {
     '```',
     ...(threads.length > 0 ? ['Review comments already on these lines:', ...threads.map((c) => `- ${c.author}: ${c.body.replace(/\s+/g, ' ').trim()}`)] : []),
     `A comment on these lines goes there: add_draft (path "${t.path}", line ${t.endLine}${t.startLine !== t.endLine ? `, start_line ${t.startLine}` : ''}, side "${t.side}").`,
+  ].join('\n');
+}
+
+/** What a question about an open file adds: which file, and where it is (it's read in the worktree, not pasted in). */
+function fileContext(path: string): string {
+  return [
+    `The file ${path}, which the user has open in PR Review: read it in the worktree. "This file" or "here" in the question means it.`,
+    `A comment on one of its lines goes there: add_draft (path "${path}", the line, side "RIGHT"); only lines the pull request shows in its diff can take one.`,
   ].join('\n');
 }
 
@@ -225,6 +240,8 @@ export function claudePrompt(request: AgentRequest, context: LineContext | null 
       ? threadContext(request.thread.path, request.target, context)
       : request.kind === 'lines' && request.target
         ? linesContext(request.target, context)
-        : null;
+        : request.kind === 'file' && request.file
+          ? fileContext(request.file.path)
+          : null;
   return [promptHeader(request), '', words, ...(about ? ['', CONTEXT, about] : [])].join('\n');
 }

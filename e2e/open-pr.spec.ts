@@ -325,7 +325,7 @@ test('asking Claude about a line: the line gets a marker, the answer is in the s
   await expect(comments).toHaveCount(0);
 
   // Removing the marker takes it off the line, and is saved, so a refresh doesn't bring it back.
-  await win.getByRole('button', { name: /^Comments/ }).click();
+  await win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: /^Comments/ }).click();
   await expect(comments).toBeVisible();
   await win.getByRole('button', { name: 'Hide this marker' }).click();
   await expect(win.getByText('Asked Claude:')).toHaveCount(0);
@@ -354,9 +354,11 @@ test('Claude offers a follow-up as buttons under its answer, and a choice sends 
     (k) => (globalThis as unknown as { api: Api }).api.askClaude(k, { kind: 'lines', prompt: 'Is the list complete?', target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 3, endLine: 3 } }),
     key,
   );
-  // The Claude button shows the conversation in the side panel; the Comments button brings the comments back.
-  const claude = win.getByRole('button', { name: 'Claude', exact: true });
-  await claude.click();
+  // The strip of icons on the right shows the comments or Claude in the panel beside it; the one showing hides it again.
+  const bar = win.getByRole('navigation', { name: 'Comments and Claude' });
+  const side = win.getByRole('complementary', { name: 'Side panel' });
+  const claude = bar.getByRole('button', { name: 'Claude', exact: true });
+  if ((await claude.getAttribute('aria-pressed')) !== 'true') await claude.click();
   await expect(claude).toHaveAttribute('aria-pressed', 'true');
   const panel = win.getByRole('region', { name: 'Claude' });
   await expect(panel.getByText('Leave a comment about it?')).toBeVisible({ timeout: 20_000 });
@@ -384,9 +386,17 @@ test('Claude offers a follow-up as buttons under its answer, and a choice sends 
   await expect(panel.getByRole('button', { name: 'Effort', exact: true })).toHaveText('Low');
   await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, null), key);
   await expect(model).not.toHaveText('Haiku 5.5');
-  await win.getByRole('button', { name: /^Comments/ }).click();
+  const comments = bar.getByRole('button', { name: /^Comments/ });
+  await comments.click();
   await expect(win.getByRole('region', { name: 'Comments' })).toBeVisible();
   await expect(claude).toHaveAttribute('aria-pressed', 'false');
+  await expect(comments).toHaveAttribute('aria-pressed', 'true');
+  // Pressing the icon that's showing hides the panel; pressing it again brings it back.
+  await comments.click();
+  await expect(side).toHaveCount(0);
+  await expect(comments).toHaveAttribute('aria-pressed', 'false');
+  await comments.click();
+  await expect(win.getByRole('region', { name: 'Comments' })).toBeVisible();
 });
 
 test('Ask Claude on a review thread: the thread shows over the box, can be removed, and goes with the question', async () => {
@@ -408,7 +418,7 @@ test('Ask Claude on a review thread: the thread shows over the box, can be remov
     .poll(async () => (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.at(-1), { timeout: 15_000 })
     .toMatchObject({ request: { kind: 'thread', prompt: 'Is this addressed?', thread: { id: 'T_outdated', path: 'src/calc.ts' } }, done: true });
   await expect(panel.getByRole('button', { name: /Thread on calc\.ts/ })).toBeVisible();
-  await win.getByRole('button', { name: /^Comments/ }).click();
+  await win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: /^Comments/ }).click();
 });
 
 test('an agent acts in the app over MCP: marks a file viewed, shows a thread and opens a search', async () => {
@@ -430,6 +440,120 @@ test('an agent acts in the app over MCP: marks a file viewed, shows a thread and
   await call('search_code', { query: 'loyalty', show: true });
   await expect(win.getByRole('textbox', { name: 'Search', exact: true })).toHaveValue('loyalty');
   await client.close();
+});
+
+test('the Claude box asks about what you have selected or open in the diff', async () => {
+  const key = 'github.com/acme/demo#1';
+  const claudeIcon = win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: 'Claude', exact: true });
+  if ((await claudeIcon.getAttribute('aria-pressed')) !== 'true') await claudeIcon.click();
+  const panel = win.getByRole('region', { name: 'Claude' });
+  const box = panel.getByRole('textbox', { name: 'Ask Claude' });
+
+  // Selecting lines 3–5 (dragging down the line numbers) puts them over the box, and the question goes with them.
+  const file = win.locator('section[aria-label="src/calc.ts"]');
+  await file.locator('[data-additions] [data-column-number="3"]').first().scrollIntoViewIfNeeded();
+  const from = await file.locator('[data-additions] [data-column-number="3"]').first().boundingBox();
+  const to = await file.locator('[data-additions] [data-column-number="5"]').first().boundingBox();
+  await win.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 6 });
+  await win.mouse.up();
+  // Under the box: what the question is about, with × to drop it. (The question's own label in the conversation, once
+  // sent, also reads calc.ts:3–5, so the chip is found by its title.)
+  const lines = panel.locator('[title^="Your next question is about these lines"]');
+  await expect(lines).toBeVisible();
+  await expect(lines).toContainText('calc.ts:3–5');
+  await expect(lines.getByRole('button', { name: 'Don’t ask about these lines' })).toBeVisible();
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about these lines…');
+  await box.fill('Why a loop here?');
+  await box.press('Enter');
+  const lastRequest = () => win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key).then((v) => v?.exchanges.at(-1)?.request);
+  await expect.poll(lastRequest, { timeout: 15_000 }).toMatchObject({ kind: 'lines', prompt: 'Why a loop here?', target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 3, endLine: 5 } });
+  // Sent: the box is about the pull request again.
+  await expect(lines).toHaveCount(0);
+  await expect(panel.getByText('About the whole pull request')).toBeVisible();
+
+  // An ordinary text selection in the code counts too; going to the box to ask keeps it, clicking in the code drops it.
+  // A line's text (its first token), not its box, which starts in the line-number gutter; scrolled into the window first.
+  const code = async (n: number) => {
+    const token = file.locator(`[data-additions] [data-line="${n}"] span`).first();
+    await token.scrollIntoViewIfNeeded();
+    return (await token.boundingBox())!;
+  };
+  const dragOverCode = async (a: number, b: number) => {
+    // An earlier search scrolled the code sideways: back to the lines' start, so their text is where its boxes say.
+    await file.evaluate((s) => s.querySelector('diffs-container')?.shadowRoot?.querySelectorAll('[data-code]').forEach((c: { scrollLeft: number }) => (c.scrollLeft = 0)));
+    const [x, y] = [await code(a), await code(b)];
+    await win.mouse.move(x.x + 2, x.y + x.height / 2);
+    await win.mouse.down();
+    await win.mouse.move(y.x + y.width - 2, y.y + y.height / 2, { steps: 6 });
+    await win.mouse.up();
+  };
+  await dragOverCode(3, 5);
+  await expect(lines).toBeVisible();
+  await box.click();
+  await expect(lines).toBeVisible();
+  await box.fill('And this?');
+  await box.press('Enter');
+  await expect.poll(lastRequest, { timeout: 15_000 }).toMatchObject({ kind: 'lines', prompt: 'And this?', target: { path: 'src/calc.ts', side: 'RIGHT', startLine: 3, endLine: 5 } });
+  // Clicking a blank margin (right of the file, on no text) drops it, as clicking other code does.
+  await dragOverCode(3, 5);
+  await expect(lines).toBeVisible();
+  const section = (await file.boundingBox())!;
+  const five = await code(5);
+  await win.mouse.click(section.x + section.width + 6, five.y + five.height / 2);
+  await expect(lines).toHaveCount(0);
+  await dragOverCode(3, 5);
+  await expect(lines).toBeVisible();
+  const seven = await code(7);
+  await win.mouse.click(seven.x + 30, seven.y + seven.height / 2);
+  await expect(lines).toHaveCount(0);
+
+  // Clicking into a review thread selects it: highlighted, and the one the box asks about. Clicking elsewhere in the code
+  // deselects it; × asks about nothing.
+  const thread = win.locator('[id="thread-T_outdated"]');
+  await thread.getByText('Can items be negative here?').click();
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about this conversation…');
+  await expect(thread).toHaveClass(/border-accent/);
+  await win.mouse.click(section.x + section.width + 6, seven.y + seven.height / 2);
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about this pull request…');
+  await expect(thread).not.toHaveClass(/border-accent/);
+  await thread.getByText('Can items be negative here?').click();
+  await panel.getByRole('button', { name: 'Don’t ask about this thread' }).click();
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about this pull request…');
+  await expect(thread).not.toHaveClass(/border-accent/);
+});
+
+test('with a file open in its own tab, the Claude box asks about that file', async () => {
+  const key = 'github.com/acme/demo#1';
+  const panel = win.getByRole('region', { name: 'Claude' });
+  const box = panel.getByRole('textbox', { name: 'Ask Claude' });
+  const fileChip = panel.locator('[title^="Your next question is about src/calc.ts"]');
+  const lastRequest = () => win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key).then((v) => v?.exchanges.at(-1)?.request);
+
+  // ⌘-click in the file tree opens the file in its own tab.
+  const filesIcon = win.getByRole('navigation', { name: 'Files and search' }).getByRole('button', { name: 'Files' });
+  if ((await filesIcon.getAttribute('aria-pressed')) !== 'true') await filesIcon.click();
+  await win.locator('[data-sidebar]').getByText('calc.ts', { exact: true }).first().click({ modifiers: ['Meta'] });
+  const fileTab = win.getByRole('tablist', { name: 'Open files' }).getByRole('tab', { name: /calc\.ts/ });
+  await expect(fileTab).toHaveAttribute('aria-selected', 'true');
+  await expect(fileChip).toBeVisible();
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about this file…');
+  await box.fill('What does this do?');
+  await box.press('Enter');
+  await expect.poll(lastRequest, { timeout: 15_000 }).toMatchObject({ kind: 'file', prompt: 'What does this do?', file: { path: 'src/calc.ts' } });
+  // Still the file you're looking at, so it stays for the next question.
+  await expect(fileChip).toBeVisible();
+
+  // × asks about the pull request until you go to another tab and back.
+  await fileChip.getByRole('button', { name: 'Don’t ask about this file' }).click();
+  await expect(box).toHaveAttribute('placeholder', 'Ask Claude about this pull request…');
+  await win.getByRole('tablist', { name: 'Open files' }).getByRole('tab', { name: /All changes/ }).click();
+  await expect(fileChip).toHaveCount(0);
+  await fileTab.click();
+  await expect(fileChip).toBeVisible();
+  await win.getByRole('button', { name: 'Close src/calc.ts' }).click();
+  await expect(fileChip).toHaveCount(0);
 });
 
 test('a window reopened from the Dock shows the pull request that was open', async () => {

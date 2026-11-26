@@ -619,15 +619,17 @@ export interface LineTarget {
   endLine: number;
 }
 
-/** A question for Claude about the pull request: free text, about some lines, or about a review thread. */
+/** A question for Claude about the pull request: free text, about some lines, a review thread, or a file open in a tab. */
 export interface AgentRequest {
-  kind: 'prompt' | 'lines' | 'thread';
+  kind: 'prompt' | 'lines' | 'thread' | 'file';
   /** What you typed. */
   prompt: string;
   /** The lines asked about: where "+" was clicked, or a thread's lines (none for a file comment). */
   target: LineTarget | null;
   /** `thread` only: the review thread asked about, and its file. */
   thread?: { id: string; path: string };
+  /** `file` only: the file asked about (the one open in a tab). */
+  file?: { path: string };
 }
 
 /** One question in the pull request's Claude session and Claude's answer, as read from the session. */

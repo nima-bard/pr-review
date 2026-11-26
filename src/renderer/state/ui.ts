@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { CodeSearchQuery } from '../../shared/model';
 import { hasUnsavedText, unsentKey, type ComposerTarget } from './unsent';
 import { moveToSlot } from './reorder';
+import { setViewContext } from './viewContext';
 
 export type PrViewKind = 'overview' | 'files' | 'commits';
 export type ContentTab = { id: 'changes'; kind: 'changes' } | { id: string; kind: 'file'; path: string; preview: boolean; changed: boolean };
@@ -121,7 +122,7 @@ export function showSidePanel(key: string, tab: SidePanelTab): void {
   updateUi(key, { view: 'files', showPanel: true, panelTab: tab });
 }
 
-/** The Comments and Claude buttons (⇧⌘C, ⇧⌘A): show the side panel on `tab`, or close it when it already shows `tab`. */
+/** Show the side panel on `tab`, or close it when it already shows `tab`. */
 export function toggleSidePanel(key: string, tab: SidePanelTab): void {
   const ui = getPrUi(key);
   if (sidePanelShows(ui, tab)) updateUi(key, { showPanel: false });
@@ -135,6 +136,7 @@ export function sidePanelShows(ui: PrUi, tab: SidePanelTab): boolean {
 
 /** "Ask Claude" on a review thread: the conversation, with the thread over its box for the next question. */
 export function askAboutThread(key: string, threadId: string): void {
+  setViewContext(key, { kind: 'thread', threadId });
   showSidePanel(key, 'claude');
   updateUi(key, (ui) => ({ claudeRef: { threadId, seq: (ui.claudeRef?.seq ?? 0) + 1 } }));
 }
@@ -230,6 +232,8 @@ export function requestComposer(key: string, next: ComposerTarget | null): void 
 }
 
 export function focusFile(key: string, path: string, threadId: string | null = null, elementId: string | null = null): void {
+  // Going to a thread selects it (highlighted, and what the Claude box asks about), even when it was already the one.
+  if (threadId) setViewContext(key, { kind: 'thread', threadId });
   updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusElement: elementId, focusSeq: ui.focusSeq + 1, view: 'files' }));
 }
 

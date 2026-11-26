@@ -189,7 +189,7 @@ export interface DockTab {
  */
 export type ContextMenuItem = { id: string; label: string; enabled?: boolean; accelerator?: string; checked?: boolean } | 'separator';
 
-export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-comments' | 'toggle-claude' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
+export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'layout-split' | 'layout-unified' | 'toggle-comments' | 'toggle-claude' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 
 export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks' | 'reportTabs' | 'onActivateTab'>;
 

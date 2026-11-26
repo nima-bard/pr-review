@@ -267,9 +267,12 @@ function buildMenu(): void {
       {
         label: 'View',
         submenu: [
-          { label: 'Toggle File Tree', accelerator: 'CmdOrCtrl+B', click: send('toggle-tree') },
-          { label: 'Toggle Comments', accelerator: 'CmdOrCtrl+Shift+C', click: send('toggle-comments') },
+          { label: 'Toggle Left Panel', accelerator: 'CmdOrCtrl+B', click: send('toggle-tree') },
+          { label: 'Toggle Right Panel', accelerator: 'CmdOrCtrl+Shift+C', click: send('toggle-comments') },
           { label: 'Toggle Claude', accelerator: 'CmdOrCtrl+Shift+A', click: send('toggle-claude') },
+          { type: 'separator' },
+          { label: 'Split Diff', click: send('layout-split') },
+          { label: 'Unified Diff', click: send('layout-unified') },
           { label: 'Toggle Word Wrap', accelerator: 'Alt+Z', click: send('toggle-word-wrap') },
           { type: 'separator' },
           { label: 'Find in Files', accelerator: 'CmdOrCtrl+Shift+F', click: send('find-in-files') },
@@ -349,7 +352,7 @@ void app.whenReady().then(async () => {
   });
   applyAppTheme((await registry.appState.settings()).appTheme);
   registerIpc(registry.api());
-  // Without the server (no Keychain access…) the app still works; Settings › Claude shows that it isn't running.
+  // Without the server (its port taken…) the app still works; Settings › Claude shows that it isn't running.
   await registry.startMcp().catch(() => undefined);
   app.setAboutPanelOptions({ applicationName: 'PR Review', applicationVersion: currentVersion() });
   buildMenu();

@@ -11,6 +11,7 @@ import { Reactions } from '../components/Reactions';
 import { Avatar, Badge, Button, cx, Icon, Markdown, timeAgo } from '../components/ui';
 import { useClaudeSettings } from '../state/claude';
 import { askAboutThread, focusFile } from '../state/ui';
+import { setViewContext, useSelectedThread } from '../state/viewContext';
 import { CommentEditor } from './CommentEditor';
 import { loadFile } from './useFileDiff';
 
@@ -228,8 +229,8 @@ export function ThreadCard({
   const claudeOn = useClaudeSettings((s) => s.enabled);
   // Ask Claude about this thread: the conversation opens with the thread over its box.
   const askClaude = claudeOn && (
-    <Button size="sm" variant="ghost" title="Ask Claude about this conversation" onClick={() => askAboutThread(key, thread.id)} className="ml-auto flex-none text-link! hover:text-link!">
-      <Icon name="comment" size={13} />
+    <Button size="sm" variant="ghost" title="Ask Claude about this conversation" onClick={() => askAboutThread(key, thread.id)} className="flex-none text-link! hover:text-link!">
+      <Octicon name="comment-ai" size={14} />
       Ask Claude
     </Button>
   );
@@ -242,6 +243,12 @@ export function ThreadCard({
   useEffect(() => {
     if (focused) setExpanded(true);
   }, [focused]);
+
+  // The thread you're in (clicked into, or went to: focusFile) is selected: highlighted, and what the Claude box asks
+  // about next. Clicking elsewhere in the code takes that away again (useTextSelectionContext). Not on mounting while
+  // "focused": that stays set after a jump, so a card for the same thread mounting later (in a file's tab) would take it.
+  const inThread = () => setViewContext(key, { kind: 'thread', threadId: thread.id });
+  const selected = useSelectedThread(key, thread.id);
 
   // Resolving a conversation (here, elsewhere in the app or on github.com) folds it away; unresolving opens it again.
   const wasResolved = useRef(thread.isResolved);
@@ -298,10 +305,13 @@ export function ThreadCard({
   return (
     <div
       id={panel ? undefined : `thread-${thread.id}`}
+      data-thread-card
+      onPointerDownCapture={inThread}
+      onFocusCapture={inThread}
       className={cx(
         'rounded-[9px] bg-raised border overflow-hidden font-sans text-comment',
         !wide && !panel && 'max-w-[680px]',
-        focused ? 'border-accent' : tone === 'warn' && showTier && !thread.isResolved ? 'border-warn-line' : 'border-line-2',
+        selected ? 'border-accent' : tone === 'warn' && showTier && !thread.isResolved ? 'border-warn-line' : 'border-line-2',
       )}
     >
       {panel ? (
@@ -414,35 +424,41 @@ export function ThreadCard({
             <CommentItem key={c.id} snapshot={snapshot} comment={c} reply={i > 0} clamp={panel} onQuote={quoteInto} />
           ))}
           {thread.viewerCanReply && (
-            <div className={cx('flex flex-col gap-2 px-3 pt-2.5 pb-3', thread.comments.length > 1 && 'bg-inset')}>
-              <div className="flex items-start gap-2">
-                <label className="sr-only" htmlFor={`reply-${variant}-${thread.id}`}>
-                  Reply
-                </label>
-                <textarea
-                  ref={replyBox}
-                  id={`reply-${variant}-${thread.id}`}
-                  rows={reply.includes('\n') ? 4 : 1}
-                  value={reply}
-                  onChange={(e) => setReply(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && reply.trim()) send(false);
-                    if (e.key === 'Escape') setReply('');
-                  }}
-                  placeholder="Write a reply"
-                  className="flex-1 resize-y min-h-[32px] px-2.5 py-[5px] rounded-[7px] bg-side border border-line-2 focus:border-accent outline-none"
-                />
-                {!thread.isResolved && thread.viewerCanResolve && !reply.trim() && (
-                  <Button disabled={busy} onClick={() => setResolved(true)}>
-                    Resolve
-                  </Button>
-                )}
-                {!thread.isResolved && !reply.trim() && askClaude}
-              </div>
+            // @container: the hint by the reply buttons goes when the card is too narrow for it and them on one row.
+            <div className={cx('@container flex flex-col gap-2 px-3 pt-2.5 pb-3', thread.comments.length > 1 && 'bg-inset')}>
+              <label className="sr-only" htmlFor={`reply-${variant}-${thread.id}`}>
+                Reply
+              </label>
+              <textarea
+                ref={replyBox}
+                id={`reply-${variant}-${thread.id}`}
+                rows={reply.includes('\n') ? 4 : 1}
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && reply.trim()) send(false);
+                  if (e.key === 'Escape') setReply('');
+                }}
+                placeholder="Write a reply"
+                className="w-full resize-y min-h-[32px] px-2.5 py-[5px] rounded-[7px] bg-side border border-line-2 focus:border-accent outline-none"
+              />
+              {/* Under the box, until you type: Ask Claude on the left, Resolve on the right. */}
+              {!thread.isResolved && !reply.trim() && (thread.viewerCanResolve || askClaude) && (
+                <div className="flex items-center gap-2">
+                  {askClaude}
+                  {thread.viewerCanResolve && (
+                    <Button size="sm" disabled={busy} onClick={() => setResolved(true)} className="ml-auto">
+                      Resolve
+                    </Button>
+                  )}
+                </div>
+              )}
               {reply.trim() && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11.5px] text-muted">{snapshot.pendingReview ? 'Added to your pending review from github.com until you submit it.' : 'Posts immediately · ⌘⏎'}</span>
-                  <span className="flex-1" />
+                // Right-aligned, so in a card too narrow even for the buttons, Reply wraps under them rather than to the left.
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <span className={cx('mr-auto text-[11.5px] text-muted', snapshot.pendingReview ? '@max-[44rem]:hidden' : '@max-[24rem]:hidden')}>
+                    {snapshot.pendingReview ? 'Added to your pending review from github.com until you submit it.' : 'Posts immediately · ⌘⏎'}
+                  </span>
                   <Button size="sm" variant="ghost" onClick={() => setReply('')}>
                     Cancel
                   </Button>
@@ -474,7 +490,7 @@ export function ThreadCard({
                   'This conversation was marked as resolved'
                 )}
               </span>
-              {askClaude}
+              {askClaude && <span className="ml-auto">{askClaude}</span>}
             </div>
           )}
           {!thread.isResolved && !thread.viewerCanReply && askClaude && <div className="flex px-3 py-2 border-t border-line">{askClaude}</div>}
