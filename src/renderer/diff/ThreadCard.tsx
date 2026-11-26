@@ -227,7 +227,7 @@ export function ThreadCard({
   const claudeOn = useClaudeSettings((s) => s.enabled);
   // Ask Claude about this thread: the conversation opens with the thread over its box.
   const askClaude = claudeOn && (
-    <Button size="sm" variant="ghost" title="Ask Claude about this conversation" onClick={() => askAboutThread(key, thread.id)} className="ml-auto flex-none">
+    <Button size="sm" variant="ghost" title="Ask Claude about this conversation" onClick={() => askAboutThread(key, thread.id)} className="ml-auto flex-none text-link! hover:text-link!">
       <Icon name="comment" size={13} />
       Ask Claude
     </Button>
