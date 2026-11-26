@@ -1,25 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-- **Your pull request tabs in the Dock menu:** right-click PR Review's icon in the Dock to switch to any open pull request (the one in front is ticked), or open a new tab. A popped-out pull request's window is named after it, so macOS lists it there and in the Window menu too.
-- **Clean up worktrees of merged and closed pull requests**, now including your own worktrees that have the pull request's branch checked out (the branch stays) and ones whose pull request is open in a tab (the tab closes). Clean up removes them all, or remove them one at a time. Worktrees that would lose something are listed too, labelled (Uncommitted changes, Commits on no branch, Locked), with Force remove for the first two.
-- A merged or closed pull request shows a **banner offering to remove its worktree** and close the tab.
-- The clean-up on the New tab checks again whenever you come back to it or close a pull request's tab.
-- **Filters in All pull requests suggest as you type**, like github.com: people with their avatars (and @me) for Author, Reviewers and Assignee, the repository's labels with their colours, and the Review and Sort choices in words. Pick with the mouse or ↑ ↓ and Enter, or press Enter to filter by what you typed.
-- **Slate** theme: primary buttons in Hydra's pink.
-- Resolving a conversation collapses it, and unresolving one opens it again.
-- A file’s sideways scrollbar stays at the bottom of the window while the file is on screen, so you can scroll long lines in the middle of a big file without going to its end first.
+Ask Claude and the MCP server were built by @nima-bard ([their branch](https://github.com/nima-bard/pr-review/tree/feature/agents)). Thank you!
 
 ### Ask Claude
 
-- **Optional**: Claude is off until you turn it on in Settings › Claude, and runs as your own Claude Code, signed in as you are. Then each pull request gets a **Claude** button: it shows the conversation, and its arrow opens the session in **Claude Desktop** or **Claude Code**.
+- **Optional**: Claude is off until you turn it on in Settings › Claude, and runs as your own Claude Code, signed in as you are. Then the Files view gets a **Claude** icon on its right edge, beside Comments: it shows the conversation, and the button at the top of the Claude panel opens the session in **Claude Desktop** or **Claude Code**.
 - **One side panel** in the Files view, in place of the Conversations panel: it shows the review comments, each with a link to its line, or the conversation with Claude. As in VS Code, a strip of icons runs down each side of the Files view: **Files** and **Search** on the left, **Comments** (with how many threads are unresolved) and **Claude** on the right. An icon shows its view in the panel on that side, and the one that's showing hides the panel again (⌘B and ⇧⌘C do too; ⇧⌘A goes straight to Claude). Opening the pull request in Claude Desktop or Claude Code is in the Claude panel's title.
 - **One Claude Code session per pull request, and it is the conversation.** Questions about a line and what you type in the side panel go into it, and it opens in Claude Desktop or Claude Code, named “PR #12 · title”, the same session every time. What you ask there shows in the app too, as it happens. PR Review keeps no copy of the conversation: it reads it from the session, and keeps only which session it is, in the worktree’s git folder (never committed, and removed with the worktree).
 - **Ask about a line**: the comment editor has **Comment | Ask Claude** (or start with `/ask` or `/claude`). The question goes to Claude with the lines and the comments on them; the line gets a marker that opens the answer in the conversation, with Go to line and the comments Claude added. Comments Claude writes go into your review as drafts on the lines, marked “from Claude”, not on GitHub: edit or delete them like your own. The marker’s × removes it for good.
 - **A conversation like Claude Desktop’s**: your messages on the right, Claude’s answers on the left, each with how long Claude worked (counting up while it answers). You type in a box that grows as you write; **Enter** sends, **Shift+Enter** starts a new line.
 - **Claude knows what you’re looking at**: lines you select in the diff (by their numbers, or as text), or the review thread you click into or go to, show under the box (always with their line numbers, and a selected word's columns), and your next question is about them, with the code and the comments on those lines (and, for a word or name you select on a line, what you selected). A selected thread is highlighted until you click elsewhere in the code. With nothing selected, a file open in its own tab is what you ask about. × asks about the whole pull request instead.
-- **Ask Claude about a review thread**: every thread has **Ask Claude** at its bottom right. The conversation opens with the thread shown over the box (× removes it), and your question goes with the whole thread and its code. Your message links back to the thread.
+- **Ask Claude about a review thread**: every thread has **Ask Claude** under its reply box. The conversation opens with the thread shown over the box (× removes it), and your question goes with the whole thread and its code. Your message links back to the thread.
 - **Model, effort and context** under the box, as in Claude Desktop (“Opus 5.5 Extra ◔”): the model and the effort are separate buttons, and a ring shows how full the conversation’s context is. Each pull request’s conversation can choose its own model and effort, from the models your Claude Code offers and the effort levels each supports. Settings › Claude has the default (Opus 5.5, Fable 5.2 and Haiku 5.5 to choose from when Claude Code’s list can’t be read). A change applies from the next question.
 - **Short prompts**: how to work with PR Review is given to Claude once, as part of its system prompt, so each question in the session (and in Claude Desktop) is just what you asked and the lines it’s about. Claude hands wide searches to a subagent and keeps its answers short.
 - **Claude offers the next step as buttons**: when an answer leads to one thing Claude could do here (a review comment, marking files as viewed, showing something), it ends with a short question and numbered choices under the answer, as Claude Desktop asks, like **Yes, leave a comment** and **No** (1, 2… choose too). A choice sends its prompt back as your next question, about the same lines; **No** puts the buttons away.
@@ -29,11 +22,22 @@
 - Drafts show as they’ll read on GitHub: Markdown, with ```` ```suggestion```` blocks as a suggested change (the current lines and their replacement).
 - **An MCP server** in the app (127.0.0.1, with a token) lets any MCP client read the pull requests open in PR Review, add, change or delete its own draft comments, search the code, mark files as viewed and show things in the app. **Connect Claude Code** registers it for Claude Code and Claude Desktop’s Code tab; **Copy settings** gives the configuration for other clients. Nothing can post, resolve or merge on GitHub through it.
 
+### Reviewing and worktrees
+
+- **Your pull request tabs in the Dock menu:** right-click PR Review's icon in the Dock to switch to any open pull request (the one in front is ticked), or open a new tab. A popped-out pull request's window is named after it, so macOS lists it there and in the Window menu too.
+- **Clean up worktrees of merged and closed pull requests**, now including your own worktrees that have the pull request's branch checked out (the branch stays) and ones whose pull request is open in a tab (the tab closes). Clean up removes them all, or remove them one at a time. Worktrees that would lose something are listed too, labelled (Uncommitted changes, Commits on no branch, Locked), with Force remove for the first two.
+- A merged or closed pull request shows a **banner offering to remove its worktree** and close the tab.
+- The clean-up on the New tab checks again whenever you come back to it or close a pull request's tab.
+- **Filters in All pull requests suggest as you type**, like github.com: people with their avatars (and @me) for Author, Reviewers and Assignee, the repository's labels with their colours, and the Review and Sort choices in words. Pick with the mouse or ↑ ↓ and Enter, or press Enter to filter by what you typed.
+- Resolving a conversation collapses it, and unresolving one opens it again.
+- A file’s sideways scrollbar stays at the bottom of the window while the file is on screen, so you can scroll long lines in the middle of a big file without going to its end first.
+
 ### Smaller changes
 
 - The **Overview · Files · Commits** switch stays in the middle of the header, so it doesn’t move when you switch.
 - **Split | Unified** sits at the right end of the file tabs, and is in the View menu with the panels and word wrap, in place of the header’s ⚙ menu.
 - The pull request lists show each author’s avatar.
+- **Slate** theme: primary buttons in Hydra's pink.
 
 ### Fixes
 
@@ -50,7 +54,6 @@
 - Submit review showed each comment’s raw Markdown, and a long file path ran under the Show button and off the dialog. Comments now read as they will on GitHub, and paths are cut from the left so the file name stays.
 - The file tree, folded threads and the Overview’s threads previewed a comment by its first raw line (“### **Severity**…”); they now show its text.
 - A suggested change in a posted comment showed as a padded table in a text font, without its indentation. It now reads like the one on drafts: code font, indentation kept, − and + beside the lines.
-
 
 ## 0.2.0
 

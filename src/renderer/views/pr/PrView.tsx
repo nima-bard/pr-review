@@ -256,7 +256,7 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   const error = useSessions((s) => s.errors[prKey]);
   const ui = usePrUi(prKey);
   const loaded = snapshot !== undefined;
-  // The PR's Claude session, for the markers on asked lines and the Claude button, before its tab is opened.
+  // The PR's Claude session, for the markers on asked lines and the Claude icon, before its panel is opened.
   const claudeOn = useClaudeSettings((s) => s.enabled);
   useEffect(() => {
     if (loaded && claudeOn) void loadClaudeView(prKey).catch(() => undefined);

@@ -4,7 +4,7 @@ import { api, errorText } from '../api';
 import { setSessionError } from './sessions';
 import { showSidePanel } from './ui';
 
-/** Settings › Claude, kept here for the comment editor, the Claude button and the side panel. */
+/** Settings › Claude, kept here for the comment editor, the Claude icon and the side panel. */
 export const useClaudeSettings = create<ClaudeSettings>(() => ({ enabled: false, model: '', effort: '' }));
 
 export async function loadClaudeSettings(): Promise<void> {

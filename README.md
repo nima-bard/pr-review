@@ -52,10 +52,11 @@ From then on, GitHub pull request links open in PR Review, whether you click the
 
 ### Claude
 
-Claude is off until you turn it on in Settings › Claude (Claude Code must be installed). **Connect Claude Code** there registers PR Review's MCP server with Claude Code for all projects, which Claude Desktop's Code tab shares. Then each pull request gets a **Claude** button next to Submit review, the conversation in the side panel, where the comments are, and **Ask Claude** in the comment editor.
+Claude is off until you turn it on in Settings › Claude (Claude Code must be installed). **Connect Claude Code** there registers PR Review's MCP server with Claude Code for all projects, which Claude Desktop's Code tab shares. Then the Files view gets a **Claude** icon on its right edge, beside Comments, that shows the conversation in the side panel; **Ask Claude** is in the comment editor and on every review thread.
 
 - Each pull request gets one Claude Code session, named "PR #12 · title" and run in its worktree with your skills and CLAUDE.md. It is the conversation: PR Review reads it from Claude Code's own files and keeps no copy.
-- The Claude button's arrow opens the session in **Claude Desktop** or **Claude Code** (in your terminal). What you ask there shows in the app too.
+- The button at the top of the Claude panel opens the session in **Claude Desktop** or **Claude Code** (in your terminal). What you ask there shows in the app too.
+- Claude knows what you're looking at: lines or a word you select, the review thread you click into, or the file open in its own tab. It shows under the box, where × drops it.
 - Claude answers questions; it adds a review comment only when you ask for one, and may suggest one as a button under its answer. It can also mark files as viewed and show you files, lines and search results in the app.
 
 ## Privacy

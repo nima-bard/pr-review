@@ -561,7 +561,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
         {askList.length === 0 && (
           <div className="text-[12.5px] text-muted leading-relaxed">
             This pull request gets one Claude Code session: questions on a line (“Ask Claude” in a comment) and what you type below go into it, and it opens in Claude Desktop or Claude Code too
-            (the Claude button’s menu). What you ask there shows here as well. Comments Claude writes go into your review on their lines, as drafts you can edit or delete before you submit.
+            (the button at the top of this panel). What you ask there shows here as well. Comments Claude writes go into your review on their lines, as drafts you can edit or delete before you submit.
           </div>
         )}
         {view &&
