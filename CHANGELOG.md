@@ -8,11 +8,18 @@
 - The clean-up on the New tab checks again whenever you come back to it or close a pull request's tab.
 - **Filters in All pull requests suggest as you type**, like github.com: people with their avatars (and @me) for Author, Reviewers and Assignee, the repository's labels with their colours, and the Review and Sort choices in words. Pick with the mouse or ↑ ↓ and Enter, or press Enter to filter by what you typed.
 - **Slate** theme: primary buttons in Hydra's pink.
+- Resolving a conversation collapses it, and unresolving one opens it again.
+- A file’s sideways scrollbar stays at the bottom of the window while the file is on screen, so you can scroll long lines in the middle of a big file without going to its end first.
 
 ### Fixes
 
 - A pull request popped out into its own window showed "Opening pull request…" until it next changed on GitHub.
 - Filter menus in All pull requests stayed open when you opened another one or clicked elsewhere.
+- In a collapsed conversation the text sat a little higher than the arrow and buttons beside it.
+- After you resolved a conversation, “Unresolve conversation” only appeared once the pull request next synced with GitHub.
+- Your draft comments showed your initials instead of your GitHub profile picture.
+- In a narrow column a draft comment’s header broke “Line 5” over two lines and cut off its labels.
+- Dragging over lines (the line numbers, or the “+” as on github.com) only highlighted the lines you’d picked once you let go. They now light up as you drag.
 
 ## 0.2.0
 

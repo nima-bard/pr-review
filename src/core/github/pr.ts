@@ -28,8 +28,10 @@ export async function fetchPrSummary(client: GitHubClient, ref: PrRef): Promise<
   return { title: pr.title, author: pr.author?.login ?? 'ghost', authorAvatarUrl: pr.author?.avatarUrl ?? null, state: pr.state, isDraft: pr.isDraft };
 }
 
-export async function fetchViewer(client: GitHubClient): Promise<string> {
-  return (await client.graphql<ViewerResponse>(VIEWER)).viewer.login;
+/** The signed-in GitHub user: their login and profile picture. */
+export async function fetchViewer(client: GitHubClient): Promise<{ login: string; avatarUrl: string | null }> {
+  const { viewer } = await client.graphql<ViewerResponse>(VIEWER);
+  return { login: viewer.login, avatarUrl: viewer.avatarUrl ?? null };
 }
 
 export function checkFromContext(c: CheckContextNode): CheckRun | null {

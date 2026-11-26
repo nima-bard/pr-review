@@ -392,6 +392,8 @@ export interface PrSnapshot {
   ref: PrRef;
   role: Role;
   viewer: string;
+  /** The viewer's GitHub profile picture, for their own drafts. */
+  viewerAvatarUrl: string | null;
   details: PrDetails;
   clonePath: string;
   worktree: { path: string; mode: 'branch' | 'detached'; owned: boolean; behind: boolean };
@@ -429,6 +431,8 @@ export interface PrPreview {
   ref: PrRef;
   role: Role;
   viewer: string;
+  /** The viewer's GitHub profile picture, for their own drafts. */
+  viewerAvatarUrl: string | null;
   details: PrDetails;
   conversation: ConversationItem[] | null;
 }

@@ -12,6 +12,7 @@ import { Octicon } from '../components/octicons';
 import { useDiffAppearance } from '../state/settings';
 import { Composer, DraftCard } from './Composer';
 import { ThreadCard } from './ThreadCard';
+import { StickyScrollbars } from './StickyScrollbars';
 import { loadFile, useFileDiff } from './useFileDiff';
 import { useFocusLine } from './useFocusLine';
 
@@ -84,6 +85,9 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
   );
   const drafts = useMemo(() => snapshot.drafts.filter((d) => d.path === file.path), [snapshot.drafts, file.path]);
   const [selection, setSelection] = useState<SelectedLineRange | null>(null);
+  // Read by the "+" handler, so the options (and with them the whole diff) don't change on every line of a drag.
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
   const [notice, setNotice] = useState<string | null>(null);
   // Pierre keeps the "+" on the selected lines, so drop the selection once the comment editor closes (saved or discarded).
   const composerOpen = ui.composer !== null;
@@ -175,13 +179,17 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
       disableFileHeader: true,
       enableGutterUtility: true,
       onGutterUtilityClick: (range: SelectedLineRange) => {
-        if (selection && selection.side === range.side && range.start >= Math.min(selection.start, selection.end) && range.start <= Math.max(selection.start, selection.end)) {
-          startComment(selection);
+        const current = selectionRef.current;
+        if (current && current.side === range.side && range.start >= Math.min(current.start, current.end) && range.start <= Math.max(current.start, current.end)) {
+          startComment(current);
         } else {
           startComment(range);
         }
       },
       enableLineSelection: true,
+      // We pass the selection back in (`selectedLines`), so Pierre only draws what we give it: follow the drag as it
+      // goes, or the lines only light up once the mouse is released.
+      onLineSelectionChange: (range: SelectedLineRange | null) => setSelection(range),
       onLineSelected: (range: SelectedLineRange | null) => setSelection(range),
       loadDiffFiles,
       expandUnchanged: fullFile,
@@ -190,7 +198,7 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
       collapsedContextThreshold: 3,
       overflow: wordWrap ? ('wrap' as const) : ('scroll' as const),
     }),
-    [ui.layout, appearance, startComment, selection, loadDiffFiles, fullFile, wordWrap],
+    [ui.layout, appearance, startComment, loadDiffFiles, fullFile, wordWrap],
   );
 
   if (loading && !data) return <div className="px-4 py-3"><Spinner label="Loading diff…" /></div>;
@@ -211,7 +219,10 @@ const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyPr
       ) : !data?.meta ? (
         <div className="px-4 py-3 text-muted">{file.change === 'renamed' ? 'File renamed without changes.' : 'No textual changes.'}</div>
       ) : (
-        <FileDiff<Meta> fileDiff={data.meta} options={options} lineAnnotations={annotations} renderAnnotation={renderAnnotation} selectedLines={selection} />
+        <>
+          <FileDiff<Meta> fileDiff={data.meta} options={options} lineAnnotations={annotations} renderAnnotation={renderAnnotation} selectedLines={selection} />
+          {!wordWrap && <StickyScrollbars body={body} />}
+        </>
       )}
     </div>
   );

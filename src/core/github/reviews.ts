@@ -18,6 +18,7 @@ import {
   type UpdateCommentResponse,
   type AddReviewResponse,
   type AddThreadResponse,
+  type ResolvedThread,
 } from './queries';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -78,8 +79,13 @@ export async function editComment(client: GitHubClient, kind: EditableKind, id: 
   return html;
 }
 
-export async function setResolved(client: GitHubClient, threadId: string, resolved: boolean): Promise<void> {
-  await client.graphql(resolved ? RESOLVE_THREAD : UNRESOLVE_THREAD, { threadId });
+/** Resolves or unresolves a thread and returns its new state, with what the viewer may do with it now. */
+export async function setResolved(client: GitHubClient, threadId: string, resolved: boolean): Promise<ResolvedThread> {
+  type Response = Record<'resolveReviewThread' | 'unresolveReviewThread', { thread: ResolvedThread } | undefined>;
+  const data = await client.graphql<Response>(resolved ? RESOLVE_THREAD : UNRESOLVE_THREAD, { threadId });
+  const thread = (resolved ? data.resolveReviewThread : data.unresolveReviewThread)?.thread;
+  if (!thread) throw new Error('GitHub did not return the conversation.');
+  return thread;
 }
 
 export async function setViewed(client: GitHubClient, prId: string, paths: readonly string[], viewed: boolean): Promise<void> {

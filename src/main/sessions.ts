@@ -54,7 +54,7 @@ export class SessionRegistry {
   private readonly sessions = new Map<string, PrSession>();
   private readonly opening = new Map<string, Promise<void>>();
   private readonly clients = new Map<string, GitHubClient>();
-  private readonly viewers = new Map<string, Promise<string>>();
+  private readonly viewers = new Map<string, Promise<{ login: string; avatarUrl: string | null }>>();
   private scanned = false;
 
   private readonly tokens: TokenStore;
@@ -101,7 +101,7 @@ export class SessionRegistry {
     return c;
   }
 
-  private viewer(host: string): Promise<string> {
+  private viewer(host: string): Promise<{ login: string; avatarUrl: string | null }> {
     let v = this.viewers.get(host);
     if (!v) {
       v = fetchViewer(this.client(host)).catch((err: unknown) => {
@@ -245,7 +245,8 @@ export class SessionRegistry {
             appState: this.appState,
             drafts: this.drafts,
             client: this.client(ref.host),
-            viewer,
+            viewer: viewer.login,
+            viewerAvatarUrl: viewer.avatarUrl,
             clonePath,
             emit: this.emitFor(key, () => session),
           });
@@ -410,7 +411,7 @@ export class SessionRegistry {
         const via = (await this.ghWorks(host)) ? 'gh' : (await this.tokens.get(host)) ? 'device' : 'none';
         if (via === 'none') return { via, login: null, error: null };
         try {
-          return { via, login: await this.viewer(host), error: null };
+          return { via, login: (await this.viewer(host)).login, error: null };
         } catch (err) {
           return { via, login: null, error: errorMessage(err) };
         }

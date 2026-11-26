@@ -111,9 +111,10 @@ function ThenNow({ snapshot, thread }: { snapshot: PrSnapshot; thread: ThreadVie
   );
 }
 
-function IconButton({ label, onClick, children, className }: { label: string; onClick(e: React.MouseEvent): void; children: React.ReactNode; className?: string }) {
+/** A square icon button: `sm` (24px) in the thread and comment headers, `md` (28px) in the Conversations panel. */
+function IconButton({ label, onClick, children, size = 'md', className }: { label: string; onClick(e: React.MouseEvent): void; children: React.ReactNode; size?: 'sm' | 'md'; className?: string }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className={cx('grid place-items-center w-7 h-7 rounded-md text-muted hover:text-fg hover:bg-raised-2 cursor-pointer flex-none', className)}>
+    <button type="button" aria-label={label} title={label} onClick={onClick} className={cx('grid place-items-center rounded-md text-muted hover:text-fg hover:bg-raised-2 cursor-pointer flex-none', size === 'sm' ? 'w-6 h-6' : 'w-7 h-7', className)}>
       {children}
     </button>
   );
@@ -166,7 +167,7 @@ function CommentItem({ snapshot, comment, reply, clamp, onQuote }: { snapshot: P
         )}
         <span className="flex-1" />
         {comment.author === snapshot.details.author && <span className="px-2 h-5 leading-[18px] rounded-full border border-line-2 text-[11px] text-soft flex-none">Author</span>}
-        <IconButton label="Comment actions" onClick={() => void menu()} className="w-6 h-6">
+        <IconButton label="Comment actions" onClick={() => void menu()} size="sm">
           <Octicon name="kebab-horizontal" size={14} />
         </IconButton>
       </div>
@@ -232,6 +233,14 @@ export function ThreadCard({
     if (focused) setExpanded(true);
   }, [focused]);
 
+  // Resolving a conversation (here, elsewhere in the app or on github.com) folds it away; unresolving opens it again.
+  const wasResolved = useRef(thread.isResolved);
+  useEffect(() => {
+    if (thread.isResolved === wasResolved.current) return;
+    wasResolved.current = thread.isResolved;
+    setExpanded(!thread.isResolved);
+  }, [thread.isResolved]);
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);
@@ -270,7 +279,7 @@ export function ThreadCard({
   };
 
   const chevron = (
-    <IconButton label={expanded ? 'Collapse thread' : 'Expand thread'} onClick={() => setExpanded(!expanded)} className="w-6 h-6 -ml-1">
+    <IconButton label={expanded ? 'Collapse thread' : 'Expand thread'} onClick={() => setExpanded(!expanded)} size="sm" className="-ml-1">
       <Icon name="chevron" size={12} rotate={expanded ? 0 : -90} />
     </IconButton>
   );
@@ -331,7 +340,8 @@ export function ThreadCard({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5 flex-none">
+          {/* As tall as the arrow, so a taller button here can't push the row's controls out of line. */}
+          <div className="flex items-center gap-1.5 flex-none h-6">
             {expanded && showTier && (
               <Button size="sm" variant="ghost" onClick={() => setCompare(!compare)} aria-pressed={compare}>
                 Compare then ↔ now
@@ -343,7 +353,7 @@ export function ThreadCard({
               </Button>
             )}
             {thread.isResolved && <span className="px-2 h-5 leading-[18px] rounded-full border border-line-2 text-[11px] text-soft flex-none">Resolved</span>}
-            <IconButton label="Thread actions" onClick={() => void threadMenu()} className="w-6 h-6">
+            <IconButton label="Thread actions" onClick={() => void threadMenu()} size="sm">
               <Octicon name="kebab-horizontal" size={14} />
             </IconButton>
           </div>

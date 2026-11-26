@@ -79,7 +79,7 @@ export async function loadAppSettings(): Promise<void> {
 /**
  * Pierre mixes 20% of the theme's add/remove colour into changed lines (15% in the gutter, 0.2 alpha for changed words);
  * `tint` scales all three; `fontSize`/`lineHeight` set the code size. Pierre puts `unsafeCSS` in its last cascade layer,
- * so these win over its defaults.
+ * so these win over its defaults. The code's sideways scrollbars are hidden: `StickyScrollbars` draws them where you can reach them.
  */
 export function diffAppearanceCSS(tint: number, lineHeight: number, fontSize: number): string {
   const t = Math.min(40, Math.max(0, tint));
@@ -94,6 +94,7 @@ export function diffAppearanceCSS(tint: number, lineHeight: number, fontSize: nu
   --diffs-bg-addition-emphasis: rgb(from var(--diffs-addition-base) r g b / ${alpha});
   --diffs-bg-deletion-emphasis: rgb(from var(--diffs-deletion-base) r g b / ${alpha});
 }
+[data-code] { scrollbar-width: none; }
 [data-gutter-buffer], [data-column-number] { --mix-dark: ${100 - Math.round(t * 0.75)}%; --mix-light: ${100 - Math.round(t * 0.75)}%; }
 ::highlight(pr-search) { background-color: color-mix(in srgb, var(--c-warn) 38%, transparent); }
 ::highlight(pr-find) { background-color: color-mix(in srgb, var(--c-accent) 32%, transparent); }

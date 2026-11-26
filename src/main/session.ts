@@ -93,6 +93,7 @@ export interface SessionDeps {
   drafts: DraftStore;
   client: GitHubClient;
   viewer: string;
+  viewerAvatarUrl: string | null;
   clonePath: string;
   emit(event: SessionEvent): void;
 }
@@ -232,7 +233,7 @@ export class PrSession {
     fromGitHub.catch(() => undefined);
     if (!this.snapshot) {
       // The first load: the app can show the Overview now, and the conversation when it's in.
-      const preview: PrPreview = { key: this.key, ref: this.ref, role, viewer: this.deps.viewer, details, conversation: null };
+      const preview: PrPreview = { key: this.key, ref: this.ref, role, viewer: this.deps.viewer, viewerAvatarUrl: this.deps.viewerAvatarUrl, details, conversation: null };
       this.deps.emit({ type: 'preview', preview });
       conversationLoad.then(
         (c) => !this.snapshot && this.deps.emit({ type: 'preview', preview: { ...preview, conversation: c.items } }),
@@ -271,6 +272,7 @@ export class PrSession {
       ref: this.ref,
       role,
       viewer: this.deps.viewer,
+      viewerAvatarUrl: this.deps.viewerAvatarUrl,
       details,
       clonePath,
       worktree: {
@@ -826,13 +828,16 @@ export class PrSession {
   }
 
   async setResolved(threadId: string, resolved: boolean): Promise<void> {
-    await reviews.setResolved(this.deps.client, threadId, resolved);
+    const now = await reviews.setResolved(this.deps.client, threadId, resolved);
     this.update((s) => {
       const t = s.threads.find((x) => x.id === threadId);
       if (t) {
-        t.isResolved = resolved;
-        t.resolvedBy = resolved ? s.viewer : null;
-        t.triage = triage({ isResolved: resolved, comments: t.comments, anchor: t.anchor, viewerIsAuthor: s.role === 'author' });
+        t.isResolved = now.isResolved;
+        t.resolvedBy = now.resolvedBy?.login ?? (now.isResolved ? s.viewer : null);
+        // GitHub only lets you unresolve a resolved thread (and the other way round), so these change too.
+        t.viewerCanResolve = now.viewerCanResolve;
+        t.viewerCanUnresolve = now.viewerCanUnresolve;
+        t.triage = triage({ isResolved: now.isResolved, comments: t.comments, anchor: t.anchor, viewerIsAuthor: s.role === 'author' });
       }
     });
   }

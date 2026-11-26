@@ -2,12 +2,13 @@ export const VIEWER = /* GraphQL */ `
   query {
     viewer {
       login
+      avatarUrl
     }
   }
 `;
 
 export interface ViewerResponse {
-  viewer: { login: string };
+  viewer: { login: string; avatarUrl?: string | null };
 }
 
 export const PR_SUMMARY = /* GraphQL */ `
@@ -533,12 +534,29 @@ export const ADD_REPLY = /* GraphQL */ `
   }
 `;
 
+/** What resolving or unresolving changes on a thread, including what the viewer may do with it next. */
+const RESOLVED_THREAD_FIELDS = /* GraphQL */ `
+  id
+  isResolved
+  resolvedBy {
+    login
+  }
+  viewerCanResolve
+  viewerCanUnresolve
+`;
+
+export interface ResolvedThread {
+  isResolved: boolean;
+  resolvedBy: { login: string } | null;
+  viewerCanResolve: boolean;
+  viewerCanUnresolve: boolean;
+}
+
 export const RESOLVE_THREAD = /* GraphQL */ `
   mutation ($threadId: ID!) {
     resolveReviewThread(input: { threadId: $threadId }) {
       thread {
-        id
-        isResolved
+        ${RESOLVED_THREAD_FIELDS}
       }
     }
   }
@@ -604,8 +622,7 @@ export const UNRESOLVE_THREAD = /* GraphQL */ `
   mutation ($threadId: ID!) {
     unresolveReviewThread(input: { threadId: $threadId }) {
       thread {
-        id
-        isResolved
+        ${RESOLVED_THREAD_FIELDS}
       }
     }
   }

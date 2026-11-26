@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { GitHubClient } from '../../../src/core/github/client';
-import { submitReview, threadInput } from '../../../src/core/github/reviews';
+import { setResolved, submitReview, threadInput } from '../../../src/core/github/reviews';
 import { normalizeQuery } from '../../../src/core/github/search';
 import { DraftStore } from '../../../src/core/store/drafts';
 import type { Draft } from '../../../src/shared/model';
@@ -109,5 +109,35 @@ describe('Claude batch placement', () => {
     const reply = 'Sure:\n[{"id":"T1","line":3,"confidence":0.8},{"id":"T1","line":99},{"id":"nope","line":1}]';
     expect(parsePlacements(reply, items)).toEqual([{ id: 'T1', line: 3, confidence: 0.8 }]);
     expect(parsePlacements('no json here', items)).toEqual([]);
+  });
+});
+
+describe('setResolved', () => {
+  const answering = (data: unknown) => {
+    const calls: string[] = [];
+    const client = {
+      async graphql<T>(query: string): Promise<T> {
+        calls.push(query);
+        return data as T;
+      },
+    } as unknown as GitHubClient;
+    return { client, calls };
+  };
+
+  it('returns what the viewer may do next, so Unresolve shows straight after resolving', async () => {
+    const thread = { id: 'T1', isResolved: true, resolvedBy: { login: 'me' }, viewerCanResolve: false, viewerCanUnresolve: true };
+    const { client, calls } = answering({ resolveReviewThread: { thread } });
+    expect(await setResolved(client, 'T1', true)).toEqual(thread);
+    expect(calls[0]).toContain('viewerCanUnresolve');
+  });
+
+  it('reads the unresolve answer when unresolving', async () => {
+    const thread = { id: 'T1', isResolved: false, resolvedBy: null, viewerCanResolve: true, viewerCanUnresolve: false };
+    const { client } = answering({ unresolveReviewThread: { thread } });
+    expect(await setResolved(client, 'T1', false)).toEqual(thread);
+  });
+
+  it('fails when GitHub returns no thread', async () => {
+    await expect(setResolved(answering({}).client, 'T1', true)).rejects.toThrow('did not return');
   });
 });

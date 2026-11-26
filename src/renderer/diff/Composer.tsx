@@ -152,8 +152,8 @@ export function DraftCard({ snapshot, draft }: { snapshot: PrSnapshot; draft: Dr
   const range = draft.startLine !== undefined ? `Lines ${draft.startLine}–${draft.line}` : `Line ${draft.line}`;
   return (
     <div className="max-w-[680px] rounded-[9px] bg-raised border border-info-line overflow-hidden font-sans text-comment">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-line-2">
-        <span className="font-semibold">{range}</span>
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line-2">
+        <span className="font-semibold whitespace-nowrap">{range}</span>
         <Badge tone="info">Draft · not posted yet</Badge>
         {draft.unplaceable && <Badge tone="bad">Line changed in a new push · move or delete</Badge>}
         <span className="flex-1" />
@@ -170,7 +170,7 @@ export function DraftCard({ snapshot, draft }: { snapshot: PrSnapshot; draft: Dr
         </Button>
       </div>
       <div className="flex gap-2.5 px-3 py-2.5">
-        <Avatar login={snapshot.viewer} size={26} />
+        <Avatar login={snapshot.viewer} url={snapshot.viewerAvatarUrl} size={26} />
         <div className="min-w-0 flex-1 whitespace-pre-wrap text-fg">{draft.body}</div>
       </div>
     </div>
