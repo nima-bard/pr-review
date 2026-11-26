@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { SearchItem, StaleWorktree } from '../../../shared/model';
 import { formatPrRef, prViewFromUrl } from '../../../shared/prInput';
 import { api, errorText } from '../../api';
-import { Badge, Button, cx, ErrorBox, Icon, Kbd, Label, Segmented, Spinner, timeAgo } from '../../components/ui';
+import { Avatar, Badge, Button, cx, ErrorBox, Icon, Kbd, Label, Segmented, Spinner, timeAgo } from '../../components/ui';
 import { Octicon, PrStateIcon } from '../../components/octicons';
 import { loadMore, refreshInbox, useInbox } from '../../state/inbox';
 import { clearRecents, useRecents } from '../../state/recents';
@@ -171,8 +171,11 @@ export function PrRow({ item, tabId, openKeys, onOpen, showRepo = true }: { item
         <span className="flex flex-wrap items-center gap-x-1.5 text-[12px] text-muted">
           <span>#{item.ref.number}</span>
           <span aria-hidden="true">·</span>
-          <span>
-            <span className="text-soft">{item.author}</span> opened {timeAgo(item.createdAt)}
+          <span className="inline-flex items-center gap-1.5">
+            <Avatar login={item.author} url={item.authorAvatarUrl} size={16} />
+            <span>
+              <span className="text-soft">{item.author}</span> opened {timeAgo(item.createdAt)}
+            </span>
           </span>
           {review && (
             <>

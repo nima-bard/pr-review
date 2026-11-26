@@ -141,6 +141,15 @@ export class SessionRegistry implements ReviewBridge {
     return { code, threads: threads.flatMap((t) => t.comments.map((c) => ({ author: c.author, body: c.body }))) };
   }
 
+  /** What a question carries: a line ask its lines and their threads; a thread ask that whole thread and its lines' code. */
+  private async requestContext(session: PrSession, request: AgentRequest): Promise<LineContext | null> {
+    if (request.kind === 'lines' && request.target) return this.lineContext(session, request.target);
+    if (request.kind !== 'thread' || !request.thread) return null;
+    const thread = session.current?.threads.find((t) => t.id === request.thread?.id);
+    const code = request.target ? (await this.lineContext(session, request.target)).code : null;
+    return { code, threads: (thread?.comments ?? []).map((c) => ({ author: c.author, body: c.body })) };
+  }
+
   /** The PR's Claude, made when first needed: the PR must be loaded, since its session lives in the worktree. */
   private claudeFor(key: string): PrClaude {
     const existing = this.claude.get(key);
@@ -152,7 +161,7 @@ export class SessionRegistry implements ReviewBridge {
       prepare: async (request) => {
         const snap = session.current;
         if (!snap) throw new Error('The pull request is still loading.');
-        const context = request.kind === 'lines' && request.target ? await this.lineContext(session, request.target) : null;
+        const context = await this.requestContext(session, request);
         return {
           worktree: snap.worktree.path,
           env: actionEnv(snap),

@@ -42,6 +42,8 @@ export interface PrUi {
   showMerge: boolean;
   /** The output of background quick actions. */
   showRuns: boolean;
+  /** A review thread the next question to Claude is about (shown over its box); `seq` focuses the box again. */
+  claudeRef: { threadId: string; seq: number } | null;
   /** A question the Claude conversation should scroll to and highlight; `seq` repeats a jump to the same one. */
   focusAsk: { id: string; seq: number } | null;
   showVersions: boolean;
@@ -86,6 +88,7 @@ const DEFAULT_UI: PrUi = {
   showSubmit: false,
   showMerge: false,
   showRuns: false,
+  claudeRef: null,
   focusAsk: null,
   pendingCompare: null,
   sidebar: 'files',
@@ -128,6 +131,12 @@ export function toggleSidePanel(key: string, tab: SidePanelTab): void {
 /** Whether the side panel is on screen showing `tab`. */
 export function sidePanelShows(ui: PrUi, tab: SidePanelTab): boolean {
   return ui.view === 'files' && ui.showPanel && ui.panelTab === tab;
+}
+
+/** "Ask Claude" on a review thread: the conversation, with the thread over its box for the next question. */
+export function askAboutThread(key: string, threadId: string): void {
+  showSidePanel(key, 'claude');
+  updateUi(key, (ui) => ({ claudeRef: { threadId, seq: (ui.claudeRef?.seq ?? 0) + 1 } }));
 }
 
 /** Shows question `id` in the Claude conversation (from a line's marker). */

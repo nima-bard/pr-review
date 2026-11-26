@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { asks as allAsks, CLAUDE_APPS, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
-import type { ClaudeModel, ClaudeView, Exchange, PendingRequest, PrSnapshot } from '../../../shared/model';
+import { asks as allAsks, CLAUDE_APPS, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
+import type { ContextMenuItem } from '../../../shared/ipc';
+import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, PendingRequest, PrSnapshot, ThreadView } from '../../../shared/model';
+import { markdownPreview } from '../../../shared/markdownPreview';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Spinner } from '../../components/ui';
 import { ASK_STATUS } from '../../diff/AskCard';
 import { askClaude, loadClaudeModels, useClaudeSettings } from '../../state/claude';
 import { useClaudeView } from '../../state/sessions';
-import { focusFile, usePrUi } from '../../state/ui';
+import { focusFile, updateUi, usePrUi } from '../../state/ui';
 
 /** How long Claude worked: "42s", "3m 5s". */
 export function duration(ms: number): string {
@@ -33,21 +35,27 @@ function useElapsed(from: string | null, to: string | null, live: boolean): numb
  * and under it how it stands while it's on its way.
  */
 function YourMessage({ snapshot, ask, highlighted, below }: { snapshot: PrSnapshot; ask: Ask; highlighted: boolean; below?: ReactNode }) {
-  const target = ask.request.kind === 'lines' ? ask.request.target : null;
-  const prompt = ask.request.prompt.trim();
+  const { request } = ask;
+  const prompt = request.prompt.trim();
+  // To the asked lines (their marker if it's still shown, else the file), or to the thread asked about.
+  const goTo =
+    request.kind === 'thread' && request.thread
+      ? () => focusFile(snapshot.key, request.thread!.path, request.thread!.id)
+      : request.kind === 'lines' && request.target
+        ? () => focusFile(snapshot.key, request.target!.path, null, `ask-${ask.id}`)
+        : null;
   return (
     <div className="self-end max-w-[88%] min-w-0 flex flex-col items-end gap-1">
       <div className={cx('min-w-0 max-w-full flex flex-col gap-1 px-3 py-2 rounded-[12px] rounded-br-[4px] bg-raised border transition-colors', highlighted ? 'border-accent' : 'border-line-2')}>
-        {target && (
-          // To the asked lines: their marker if it's still shown, else the file.
+        {goTo && (
           <button
             type="button"
-            title={`Go to ${requestLabel(ask.request)}`}
-            onClick={() => focusFile(snapshot.key, target.path, null, `ask-${ask.id}`)}
+            title={`Go to ${requestLabel(request)}`}
+            onClick={goTo}
             className="flex items-center gap-1 max-w-full min-w-0 text-[11.5px] font-mono text-link hover:underline cursor-pointer"
           >
-            <Icon name="external" size={11} className="flex-none" />
-            <span className="truncate">{requestLabel(ask.request, { fileName: true })}</span>
+            <Icon name={request.kind === 'thread' ? 'comment' : 'external'} size={11} className="flex-none" />
+            <span className="truncate">{requestLabel(request, { fileName: true })}</span>
           </button>
         )}
         {prompt && <span className="text-[13px] text-fg whitespace-pre-wrap break-words">{prompt}</span>}
@@ -126,8 +134,7 @@ function OfferChoices({ snapshot, exchange, keys }: { snapshot: PrSnapshot; exch
   const offer = exchange.offer!;
   const choose = (prompt: string | null) => {
     if (prompt === null) return void api.dismissClaudeOffer(key, exchange.id);
-    const lines = exchange.request.kind === 'lines' ? exchange.request.target : null;
-    void askClaude(key, { kind: lines ? 'lines' : 'prompt', prompt, target: lines });
+    void askClaude(key, { ...exchange.request, prompt });
   };
   return (
     <ChoiceCard
@@ -307,34 +314,94 @@ function TakeSessionBox({ view, run, keyOf, keys }: { view: ClaudeView; run(acti
   );
 }
 
+/** The lines of a thread, for a question about it; none for a comment on the file, or one whose lines are gone. */
+function threadTarget(t: ThreadView): AgentRequest['target'] {
+  const line = t.anchor.line;
+  if (t.fileLevel || line === undefined) return null;
+  return { path: t.anchor.path, side: t.side, startLine: line, endLine: t.anchor.endLine ?? line };
+}
+
+/** The thread your next question is about, over the box: where it is and how it starts, with × to ask about nothing. */
+function ThreadReference({ snapshot, thread, onRemove }: { snapshot: PrSnapshot; thread: ThreadView; onRemove(): void }) {
+  const t = threadTarget(thread);
+  const where = `${thread.anchor.path.split('/').at(-1)}${t ? `:${t.startLine === t.endLine ? t.endLine : `${t.startLine}–${t.endLine}`}` : ''}`;
+  const first = thread.comments[0];
+  return (
+    <div className="flex items-center gap-2 min-w-0 pl-2.5 pr-1 py-1 rounded-[9px] bg-raised border border-line-2 text-[12px]">
+      <Icon name="comment" size={12} className="text-muted" />
+      <button type="button" title={`Go to the thread on ${thread.anchor.path}`} onClick={() => focusFile(snapshot.key, thread.anchor.path, thread.id)} className="font-mono text-link hover:underline cursor-pointer flex-none">
+        {where}
+      </button>
+      <span className="min-w-0 truncate text-muted">
+        {first && (
+          <>
+            <span className="text-soft font-semibold">{first.author}</span> {markdownPreview(first.body)}
+          </>
+        )}
+      </span>
+      <button type="button" aria-label="Don’t ask about this thread" title="Don’t ask about this thread" onClick={onRemove} className="grid place-items-center w-6 h-6 flex-none ml-auto rounded-md text-muted hover:text-fg hover:bg-raised-2 cursor-pointer">
+        <Icon name="close" size={11} />
+      </button>
+    </div>
+  );
+}
+
+/** "52k": a token count, short. */
+const tokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+/** How full the session's context is, as a ring that fills up (turning to a warning near the end), as in Claude Desktop. */
+function ContextRing({ context }: { context: NonNullable<ClaudeView['context']> }) {
+  const used = Math.min(1, context.tokens / context.window);
+  const r = 6.5;
+  const around = 2 * Math.PI * r;
+  const label = `Context: ${tokens(context.tokens)} of ${tokens(context.window)} tokens (${Math.round(used * 100)}%). Claude Code compacts the conversation when it’s full.`;
+  return (
+    <span role="img" aria-label={label} title={label} className={cx('grid place-items-center w-6 h-6', used >= 0.8 ? 'text-warn' : 'text-accent')}>
+      <svg viewBox="0 0 16 16" width={15} height={15} aria-hidden="true">
+        <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity={0.2} strokeWidth={2} />
+        <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeDasharray={`${used * around} ${around}`} transform="rotate(-90 8 8)" />
+      </svg>
+    </span>
+  );
+}
+
 /**
- * The conversation's model and effort, under the box as Claude Desktop shows them ("Opus 5.5  Extra"): the models your
- * Claude Code offers. A choice holds for this pull request's next questions; Settings › Claude has the default.
+ * Under the box, as Claude Desktop has them ("Opus 5.5  Extra  ◔"): the conversation's model and its effort, each its
+ * own button with the choices your Claude Code offers, and how full the context is. A choice holds for this pull
+ * request's next questions; Settings › Claude has the default.
  */
-function ModelPicker({ prKey, view, onError }: { prKey: string; view: ClaudeView | undefined; onError(message: string): void }) {
+function ModelBar({ prKey, view, onError }: { prKey: string; view: ClaudeView | undefined; onError(message: string): void }) {
   const settings = useClaudeSettings();
   const [models, setModels] = useState<ClaudeModel[] | null>(null);
   useEffect(() => void loadClaudeModels().then((list) => setModels(list.models)), []);
   const own = view?.modelChoice ?? null;
   const current = own ?? { model: settings.model, effort: settings.effort };
   const label = models ? modelLabel(models, current) : null;
-  const open = async () => {
+  const choose = async (menu: (list: ClaudeModel[]) => ContextMenuItem[]) => {
     const list = models ?? (await loadClaudeModels()).models;
-    const choice = modelChoice(list, current, await api.contextMenu(modelMenuItems(list, current, own === null)));
+    const choice = modelChoice(list, current, await api.contextMenu(menu(list)));
     if (choice) await api.chooseClaudeModel(prKey, choice === 'default' ? null : choice).catch((err: unknown) => onError(errorText(err)));
   };
+  const item = 'h-6 px-2 rounded-md text-[12px] hover:bg-raised cursor-pointer whitespace-nowrap';
   return (
-    <button
-      type="button"
-      aria-haspopup="menu"
-      aria-label="Model and effort"
-      title={`The model and effort for this pull request’s next questions${own ? '' : ' (the default from Settings › Claude)'}`}
-      onClick={() => void open()}
-      className="flex items-baseline gap-1.5 min-w-0 h-6 px-2 rounded-md text-[12px] hover:bg-raised cursor-pointer"
-    >
-      <span className="text-fg truncate">{label?.model ?? 'Model'}</span>
-      {label?.effort && <span className="text-muted flex-none">{label.effort}</span>}
-    </button>
+    <span className="flex items-center justify-end gap-0.5 min-w-0">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-label="Model"
+        title={`The model for this pull request’s next questions${own ? '' : ' (the default from Settings › Claude)'}`}
+        onClick={() => void choose((list) => modelMenuItems(list, current, own === null))}
+        className={cx(item, 'min-w-0 truncate text-fg')}
+      >
+        {label?.model ?? 'Model'}
+      </button>
+      {models && hasEfforts(models, current) && (
+        <button type="button" aria-haspopup="menu" aria-label="Effort" title="How hard Claude thinks for this pull request’s next questions" onClick={() => void choose((list) => effortMenuItems(list, current))} className={cx(item, 'text-muted')}>
+          {label?.effort ?? 'Default'}
+        </button>
+      )}
+      {view?.context && <ContextRing context={view.context} />}
+    </span>
   );
 }
 
@@ -351,20 +418,26 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const last = view?.exchanges.at(-1);
-  // The box grows with what you type, like Claude Desktop's (up to its max height, then it scrolls).
+  // The box grows with what you type, like Claude Desktop's (up to its max height, then it scrolls). It's measured only
+  // on screen: hidden behind the comments it measures 0, and would stay a line short.
   useLayoutEffect(() => {
     const el = input.current;
-    if (!el) return;
+    if (!el || !shown) return;
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
-  }, [text]);
+  }, [text, shown]);
   // Follow the conversation as it grows, like a chat, and show the latest when the tab comes back.
   useLayoutEffect(() => {
     const el = list.current;
     if (el && shown) el.scrollTop = el.scrollHeight;
   }, [shown, view?.exchanges.length, view?.pending.length, last?.reply, last?.activity.length]);
+  // "Ask Claude" on a thread: it shows over the box, which takes the focus.
+  const { focusAsk, claudeRef } = usePrUi(key);
+  const refThread = claudeRef ? snapshot.threads.find((t) => t.id === claudeRef.threadId) : undefined;
+  useEffect(() => {
+    if (claudeRef && shown) input.current?.focus();
+  }, [claudeRef, shown]);
   // "Show in conversation" on a line: bring that question into view and mark it for a moment.
-  const focusAsk = usePrUi(key).focusAsk;
   const [highlighted, setHighlighted] = useState<string | null>(null);
   useEffect(() => {
     if (!focusAsk) return;
@@ -376,8 +449,12 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
 
   const send = async () => {
     if (!text.trim()) return;
-    await askClaude(key, { kind: 'prompt', prompt: text, target: null });
+    const request: AgentRequest = refThread
+      ? { kind: 'thread', prompt: text, target: threadTarget(refThread), thread: { id: refThread.id, path: refThread.anchor.path } }
+      : { kind: 'prompt', prompt: text, target: null };
+    await askClaude(key, request);
     setText('');
+    updateUi(key, { claudeRef: null });
   };
   const run = (action: () => Promise<void>) => {
     setError(null);
@@ -411,6 +488,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
       <div className="px-3 pt-2.5 pb-2 border-t border-line flex flex-col gap-1.5">
         {view && <TakeSessionBox view={view} run={run} keyOf={key} keys={shown} />}
         {status && <span className="text-[11.5px] text-muted">{status}</span>}
+        {refThread && <ThreadReference snapshot={snapshot} thread={refThread} onRemove={() => updateUi(key, { claudeRef: null })} />}
         <div className="flex items-end gap-1 rounded-[14px] border border-line-2 bg-card focus-within:border-accent pl-3 pr-1.5 py-1.5">
           <textarea
             ref={input}
@@ -424,8 +502,8 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
               e.preventDefault();
               void send();
             }}
-            placeholder="Ask Claude about this pull request…"
-            className="flex-1 min-w-0 resize-none bg-transparent outline-none text-[13px] leading-[1.45] py-1 max-h-[200px] overflow-y-auto"
+            placeholder={refThread ? 'Ask Claude about this conversation…' : 'Ask Claude about this pull request…'}
+            className="flex-1 min-w-0 resize-none bg-transparent outline-none! text-[13px] leading-[1.45] py-1 max-h-[200px] overflow-y-auto"
           />
           <button
             type="button"
@@ -439,7 +517,7 @@ export function ClaudeConversation({ snapshot, shown }: { snapshot: PrSnapshot; 
           </button>
         </div>
         <span className="flex justify-end -mr-1">
-          <ModelPicker prKey={key} view={view} onError={setError} />
+          <ModelBar prKey={key} view={view} onError={setError} />
         </span>
       </div>
     </>

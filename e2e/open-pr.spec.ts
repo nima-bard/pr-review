@@ -378,14 +378,37 @@ test('Claude offers a follow-up as buttons under its answer, and a choice sends 
   await expect(panel.getByText('Noted.')).toBeVisible({ timeout: 15_000 });
   await expect(box).toHaveValue('');
   // The conversation's own model and effort show under the box, and going back shows Settings' default again.
-  const picker = panel.getByRole('button', { name: 'Model and effort' });
+  const model = panel.getByRole('button', { name: 'Model', exact: true });
   await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, { model: 'claude-haiku-5-5', effort: 'low' }), key);
-  await expect(picker).toHaveText(/Haiku 5\.5\s*Low/);
+  await expect(model).toHaveText('Haiku 5.5');
+  await expect(panel.getByRole('button', { name: 'Effort', exact: true })).toHaveText('Low');
   await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.chooseClaudeModel(k, null), key);
-  await expect(picker).not.toHaveText(/Haiku/);
+  await expect(model).not.toHaveText('Haiku 5.5');
   await win.getByRole('button', { name: /^Comments/ }).click();
   await expect(win.getByRole('region', { name: 'Comments' })).toBeVisible();
   await expect(claude).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('Ask Claude on a review thread: the thread shows over the box, can be removed, and goes with the question', async () => {
+  const key = 'github.com/acme/demo#1';
+  const card = win.locator('[id="thread-T_outdated"]');
+  await card.getByRole('button', { name: 'Ask Claude' }).click();
+  const panel = win.getByRole('region', { name: 'Claude' });
+  const box = panel.getByRole('textbox', { name: 'Ask Claude' });
+  await expect(box).toBeFocused();
+  await expect(panel.getByText('Can items be negative here?')).toBeVisible();
+  // × asks about nothing in particular; Ask Claude brings the thread back.
+  await panel.getByRole('button', { name: 'Don’t ask about this thread' }).click();
+  await expect(panel.getByText('Can items be negative here?')).toHaveCount(0);
+  await card.getByRole('button', { name: 'Ask Claude' }).click();
+  await box.fill('Is this addressed?');
+  await box.press('Enter');
+  await expect(panel.getByText('Can items be negative here?')).toHaveCount(0);
+  await expect
+    .poll(async () => (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.at(-1), { timeout: 15_000 })
+    .toMatchObject({ request: { kind: 'thread', prompt: 'Is this addressed?', thread: { id: 'T_outdated', path: 'src/calc.ts' } }, done: true });
+  await expect(panel.getByRole('button', { name: /Thread on calc\.ts/ })).toBeVisible();
+  await win.getByRole('button', { name: /^Comments/ }).click();
 });
 
 test('an agent acts in the app over MCP: marks a file viewed, shows a thread and opens a search', async () => {

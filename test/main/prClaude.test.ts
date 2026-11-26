@@ -66,14 +66,14 @@ function setup(start: { sessionId?: string; exists?: boolean } = {}) {
     emit: (view) => void views.push(view),
   });
   /** Claude reads the oldest unread prompt of `proc` and answers it: both land in the session, and the turn ends. */
-  const answer = (proc: FakeProcess, reply = 'ok') => {
+  const answer = (proc: FakeProcess, reply = 'ok', usage?: Record<string, number>, contextWindow?: number) => {
     const prompt = proc.sent.shift()!;
     const lines = sessions.get(proc.options.sessionId)!;
     lines.push({ type: 'user', uuid: `u${lines.length}`, message: { content: prompt } });
-    lines.push({ type: 'assistant', uuid: `a${lines.length}`, message: { content: [{ type: 'text', text: reply }], stop_reason: 'end_turn' } });
+    lines.push({ type: 'assistant', uuid: `a${lines.length}`, message: { content: [{ type: 'text', text: reply }], stop_reason: 'end_turn', usage } });
     version++;
     proc.options.onTurn();
-    proc.options.onResult(null);
+    proc.options.onResult(null, contextWindow);
   };
   /** Someone types in Claude Desktop (or Claude Code) and gets an answer, writing to the session from outside the app. */
   const writeElsewhere = (sessionId: string, prompt: string) => {
@@ -179,6 +179,18 @@ describe('PrClaude', () => {
     claude.ask(ask('two'));
     await vi.waitFor(() => expect(processes[1]?.sent).toHaveLength(1));
     expect(processes[1]!.options).toMatchObject({ model: '', effort: '' });
+  });
+
+  it('says how full the context is, against the window Claude Code names for the model', async () => {
+    const { claude, processes, answer } = setup({ sessionId: 's1' });
+    claude.ask(ask('one'));
+    await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
+    answer(processes[0]!, 'ok', { input_tokens: 10, cache_read_input_tokens: 49_990 });
+    await vi.waitFor(() => expect(claude.view().context).toEqual({ tokens: 50_000, window: 200_000 }));
+    claude.ask(ask('two'));
+    await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
+    answer(processes[0]!, 'ok', { input_tokens: 300_000 }, 1_000_000);
+    await vi.waitFor(() => expect(claude.view().context).toEqual({ tokens: 300_000, window: 1_000_000 }));
   });
 
   it('waits while Claude Desktop is answering in the session, and sends once it is free', async () => {

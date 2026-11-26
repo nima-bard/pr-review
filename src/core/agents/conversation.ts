@@ -68,6 +68,22 @@ function offered(message: unknown): ClaudeOffer | null {
 }
 
 /**
+ * How many tokens the session's context holds: what Claude's last call in the conversation (not a subagent's) read and
+ * wrote, as the session records its usage. Null before Claude has answered.
+ */
+export function contextTokens(lines: readonly SessionLine[]): number | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.type !== 'assistant' || line.parent_tool_use_id) continue;
+    const usage = (line.message as { usage?: Record<string, unknown> } | null)?.usage;
+    if (!usage) continue;
+    const n = (k: string) => (typeof usage[k] === 'number' ? (usage[k] as number) : 0);
+    return n('input_tokens') + n('cache_creation_input_tokens') + n('cache_read_input_tokens') + n('output_tokens');
+  }
+  return null;
+}
+
+/**
  * The conversation in a PR's Claude session: each prompt and Claude's answer. Prompts PR Review sent carry a header
  * (see `readPrompt`) that gives back what they were about; the others were typed in Claude Desktop or Claude Code.
  */

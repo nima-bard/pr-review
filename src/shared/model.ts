@@ -436,6 +436,7 @@ export interface SearchItem {
   ref: PrRef;
   title: string;
   author: string;
+  authorAvatarUrl: string | null;
   isDraft: boolean;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   createdAt: string;
@@ -571,13 +572,15 @@ export interface LineTarget {
   endLine: number;
 }
 
-/** A question for Claude about the pull request: free text, or about some lines. */
+/** A question for Claude about the pull request: free text, about some lines, or about a review thread. */
 export interface AgentRequest {
-  kind: 'prompt' | 'lines';
+  kind: 'prompt' | 'lines' | 'thread';
   /** What you typed. */
   prompt: string;
-  /** `lines` only: where "+" was clicked. */
+  /** The lines asked about: where "+" was clicked, or a thread's lines (none for a file comment). */
   target: LineTarget | null;
+  /** `thread` only: the review thread asked about, and its file. */
+  thread?: { id: string; path: string };
 }
 
 /** One question in the pull request's Claude session and Claude's answer, as read from the session. */
@@ -634,6 +637,8 @@ export interface ClaudeView {
   dismissedOffers: string[];
   /** The model and effort chosen in this conversation, or null for Settings › Claude's default. */
   modelChoice: ClaudeModelChoice | null;
+  /** How full the session's context is: tokens in it, of the model's window. Null before Claude has answered. */
+  context: { tokens: number; window: number } | null;
   /** Why the last attempt to reach Claude failed, until the next one. */
   error: string | null;
 }

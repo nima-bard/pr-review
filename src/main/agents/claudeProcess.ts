@@ -51,8 +51,8 @@ export interface ClaudeProcessOptions {
   mcp: { url: string; headers: Record<string, string> };
   /** Claude started a turn (for a prompt the app sent, or one it had queued). */
   onTurn(): void;
-  /** Claude finished a turn: null, or why it failed. */
-  onResult(error: string | null): void;
+  /** Claude finished a turn: null, or why it failed; and the model's context window, when Claude Code says. */
+  onResult(error: string | null, contextWindow?: number): void;
 }
 
 export interface ClaudeProcess {
@@ -110,7 +110,7 @@ export function startClaude(o: ClaudeProcessOptions): ClaudeProcess {
   const child = spawn(claudeBin(), claudeArgs(o), { cwd: o.cwd, env: { ...process.env, ...o.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = '';
   createInterface({ input: child.stdout }).on('line', (line) => {
-    let msg: { type?: string; subtype?: string; is_error?: boolean; result?: string; errors?: string[] };
+    let msg: { type?: string; subtype?: string; is_error?: boolean; result?: string; errors?: string[]; modelUsage?: Record<string, { contextWindow?: unknown }> };
     try {
       msg = JSON.parse(line) as typeof msg;
     } catch {
@@ -119,7 +119,8 @@ export function startClaude(o: ClaudeProcessOptions): ClaudeProcess {
     if (msg.type === 'system' && msg.subtype === 'init') o.onTurn();
     if (msg.type !== 'result') return;
     const failed = msg.is_error === true || (msg.subtype !== undefined && msg.subtype !== 'success');
-    o.onResult(failed ? msg.result || msg.errors?.join('\n') || `Claude stopped (${msg.subtype ?? 'error'}).` : null);
+    const windows = Object.values(msg.modelUsage ?? {}).flatMap((u) => (typeof u.contextWindow === 'number' ? [u.contextWindow] : []));
+    o.onResult(failed ? msg.result || msg.errors?.join('\n') || `Claude stopped (${msg.subtype ?? 'error'}).` : null, windows.length > 0 ? Math.max(...windows) : undefined);
   });
   child.stderr.on('data', (chunk: Buffer) => {
     stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_LIMIT);

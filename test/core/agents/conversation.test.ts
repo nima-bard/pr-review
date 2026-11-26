@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildConversation, type SessionLine } from '../../../src/core/agents/conversation';
+import { buildConversation, contextTokens, type SessionLine } from '../../../src/core/agents/conversation';
 
 let n = 0;
 const user = (content: unknown, extra: Partial<SessionLine> = {}): SessionLine => ({ type: 'user', uuid: `u${++n}`, message: { role: 'user', content }, timestamp: '2026-11-26T08:00:00Z', ...extra });
@@ -77,5 +77,17 @@ describe('buildConversation', () => {
   it('reads the text of a prompt sent with an image', () => {
     const [ex] = buildConversation([user([{ type: 'image' }, { type: 'text', text: 'What is this?' }])]);
     expect(ex?.request.prompt).toBe('What is this?');
+  });
+});
+
+describe('contextTokens', () => {
+  const used = (usage: Record<string, number>, extra: Partial<SessionLine> = {}): SessionLine => ({ ...say('…'), message: { role: 'assistant', content: [], usage }, ...extra });
+
+  it('is what Claude’s last call in the conversation read and wrote, not a subagent’s', () => {
+    expect(contextTokens([user('Hi'), used({ input_tokens: 10, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 2000, output_tokens: 500 }), used({ input_tokens: 90_000 }, { parent_tool_use_id: 'task' })])).toBe(42_510);
+  });
+
+  it('is null before Claude has answered', () => {
+    expect(contextTokens([user('Hi')])).toBeNull();
   });
 });

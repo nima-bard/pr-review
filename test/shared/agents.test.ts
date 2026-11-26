@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { askPrefix, asks, claudePrompt, claudeSystemPrompt, modelChoice, modelLabel, modelMenuItems, promptHeader, readPrompt, requestLabel, sessionTitle } from '../../src/shared/agents';
+import { askPrefix, asks, claudePrompt, claudeSystemPrompt, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, promptHeader, readPrompt, requestLabel, sessionTitle } from '../../src/shared/agents';
 import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, PrSnapshot } from '../../src/shared/model';
 
 const snap = { key: 'github.com/o/r#7', details: { url: 'https://github.com/o/r/pull/7' }, worktree: { path: '/wt/pr-7' } } as unknown as PrSnapshot;
@@ -55,6 +55,26 @@ describe('claudePrompt', () => {
   });
 });
 
+describe('a question about a review thread', () => {
+  const thread: AgentRequest = { kind: 'thread', prompt: 'Is this addressed?', target: { path: 'src/a.ts', side: 'RIGHT', startLine: 139, endLine: 139 }, thread: { id: 'PRRT_1', path: 'src/a.ts' } };
+  const fileThread: AgentRequest = { kind: 'thread', prompt: 'Why?', target: null, thread: { id: 'PRRT_2', path: 'docs/a b.md' } };
+
+  it('gives Claude the whole thread, the code it’s on and where a new comment there goes', () => {
+    const p = claudePrompt(thread, { code: 'createIndex()', threads: [{ author: 'ann', body: 'No **rollout** step.' }, { author: 'bo', body: 'Added it.' }] });
+    expect(p.startsWith('PR Review · thread PRRT_1 on src/a.ts, new lines 139–139\n\nIs this addressed?')).toBe(true);
+    expect(p).toContain('The review thread on src/a.ts, new lines 139–139:\n- ann: No **rollout** step.\n- bo: Added it.');
+    expect(p).toContain('```\ncreateIndex()\n```');
+    expect(claudePrompt(fileThread, { code: null, threads: [] })).toContain('The review thread on docs/a b.md (a comment on the file):');
+  });
+
+  it('is read back from the session with its thread, and labelled by it', () => {
+    expect(readPrompt(claudePrompt(thread))).toEqual(thread);
+    expect(readPrompt(claudePrompt(fileThread))).toEqual(fileThread);
+    expect(requestLabel(thread, { fileName: true })).toBe('Thread on a.ts:139');
+    expect(requestLabel(fileThread)).toBe('Thread on docs/a b.md');
+  });
+});
+
 describe('readPrompt', () => {
   it('gives back the request a prompt PR Review sent was made from, from the session', () => {
     expect(readPrompt(claudePrompt(lines, { code: 'x', threads: [] }))).toEqual({ ...lines, prompt: 'Does this break our guidelines?' });
@@ -80,6 +100,7 @@ describe('asks', () => {
     hiddenMarkers: [],
     dismissedOffers: [],
     modelChoice: null,
+    context: null,
     error: null,
   });
 
@@ -123,21 +144,11 @@ describe('the conversation’s model picker', () => {
     expect(modelLabel(models, { model: 'claude-haiku-4-5', effort: 'high' })).toEqual({ model: 'Haiku 4.5', effort: null });
   });
 
-  it('lists the models, the chosen one’s effort levels, and going back to Settings’ default', () => {
-    expect(ids(modelMenuItems(models, { model: 'claude-fable-5-2', effort: 'high' }, false))).toEqual([
-      'heading:model!',
-      'model:',
-      'model:claude-fable-5-2*',
-      'model:claude-haiku-4-5',
-      '-',
-      'heading:effort!',
-      'effort:',
-      'effort:low',
-      'effort:high*',
-      '-',
-      'default',
-    ]);
-    expect(ids(modelMenuItems(models, { model: 'claude-haiku-4-5', effort: '' }, true)).slice(-4)).toEqual(['heading:effort!', 'effort:*!', '-', 'default*!']);
+  it('has a model menu, with going back to Settings’ default, and a separate effort menu for the chosen model', () => {
+    expect(ids(modelMenuItems(models, { model: 'claude-fable-5-2', effort: 'high' }, false))).toEqual(['model:', 'model:claude-fable-5-2*', 'model:claude-haiku-4-5', '-', 'default']);
+    expect(ids(modelMenuItems(models, { model: '', effort: '' }, true))).toEqual(['model:', 'model:claude-fable-5-2', 'model:claude-haiku-4-5', '-', 'default*']);
+    expect(ids(effortMenuItems(models, { model: 'claude-fable-5-2', effort: 'high' }))).toEqual(['effort:', 'effort:low', 'effort:high*']);
+    expect(hasEfforts(models, { model: 'claude-haiku-4-5', effort: '' })).toBe(false);
   });
 
   it('turns a choice into the model and effort to use, keeping the effort only where the model has it', () => {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { buildConversation, type SessionLine } from '../../core/agents/conversation';
+import { buildConversation, contextTokens, type SessionLine } from '../../core/agents/conversation';
 import type { ClaudePointer } from '../../core/store/claudePointer';
 import type { AgentRequest, ClaudeApp, ClaudeModelChoice, ClaudeSettings, ClaudeView, Exchange, PendingRequest } from '../../shared/model';
 import type { ClaudeProcess, ClaudeProcessOptions } from './claudeProcess';
@@ -12,6 +12,9 @@ export const IDLE_MS = 60_000;
 
 /** How often the session is read while nobody is answering in it (every tick while someone is). */
 const QUIET_REFRESH_MS = 3000;
+
+/** A context window to measure against until Claude Code names the model's (most have this one; bigger ones say so). */
+const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 /** What the app's `claude` is started with: a change starts it again for the next question. */
 const runsWith = (c: ClaudeModelChoice): string => `${c.model}|${c.effort}`;
@@ -48,7 +51,8 @@ const sameRequest = (a: AgentRequest, b: AgentRequest) =>
   a.target?.path === b.target?.path &&
   a.target?.side === b.target?.side &&
   a.target?.startLine === b.target?.startLine &&
-  a.target?.endLine === b.target?.endLine;
+  a.target?.endLine === b.target?.endLine &&
+  a.thread?.id === b.thread?.id;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -73,6 +77,9 @@ export class PrClaude {
   private lastOwnMessage: string | null = null;
   /** The model and effort the app's `claude` runs with, to start it again when Settings › Claude changes them. */
   private runsWith: string | null = null;
+  /** Tokens in the session's context after its last answer, and the model's window as Claude Code last said. */
+  private contextTokens: number | null = null;
+  private contextWindow: number | null = null;
   private outside: { app: ClaudeApp; busy: boolean } | null = null;
   private waitingFor: ClaudeApp | null = null;
   private error: string | null = null;
@@ -93,6 +100,10 @@ export class PrClaude {
       hiddenMarkers: this.pointer?.hiddenMarkers ?? [],
       dismissedOffers: this.pointer?.dismissedOffers ?? [],
       modelChoice: this.pointer?.modelChoice ?? null,
+      context:
+        this.contextTokens === null
+          ? null
+          : { tokens: this.contextTokens, window: Math.max(this.contextWindow ?? DEFAULT_CONTEXT_WINDOW, this.contextTokens > DEFAULT_CONTEXT_WINDOW ? 1_000_000 : 0) },
       error: this.error,
     };
   }
@@ -192,12 +203,14 @@ export class PrClaude {
       if (changedAt !== undefined && changedAt !== this.changedAt) {
         const messages = await this.deps.session.messages(sessionId, dir).catch(() => []);
         this.exchanges = buildConversation(messages);
+        this.contextTokens = contextTokens(messages);
         this.lastMessage = messages.at(-1)?.uuid ?? null;
         this.changedAt = changedAt;
         this.dropRead();
       } else if (changedAt === undefined && !this.process) {
         // Deleted, or cleaned up by Claude Code: the next question starts a new session.
         this.exchanges = [];
+        this.contextTokens = null;
         this.changedAt = undefined;
       }
       this.outside = this.process ? null : await this.deps.elsewhere(sessionId).catch(() => null);
@@ -321,6 +334,7 @@ export class PrClaude {
       id = randomUUID();
       await this.savePointer({ ...pointer, sessionId: id });
       this.exchanges = [];
+      this.contextTokens = null;
       this.changedAt = undefined;
     }
     this.error = null;
@@ -339,7 +353,10 @@ export class PrClaude {
         this.turnActive = true;
         this.clearIdle();
       },
-      onResult: (error) => this.answered(error),
+      onResult: (error, contextWindow) => {
+        if (contextWindow) this.contextWindow = contextWindow;
+        this.answered(error);
+      },
     });
     this.process = proc;
     this.runsWith = runsWith(choice);

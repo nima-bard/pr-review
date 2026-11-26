@@ -25,6 +25,7 @@ function toItem(n: SearchNode, host: string): SearchItem | null {
     ref,
     title: n.title ?? '',
     author: n.author?.login ?? 'ghost',
+    authorAvatarUrl: n.author?.avatarUrl || null,
     isDraft: n.isDraft ?? false,
     state: n.state ?? 'OPEN',
     createdAt: n.createdAt ?? '',

@@ -9,7 +9,8 @@ import { api, errorText } from '../api';
 import { Octicon } from '../components/octicons';
 import { Reactions } from '../components/Reactions';
 import { Avatar, Badge, Button, cx, Icon, Markdown, timeAgo } from '../components/ui';
-import { focusFile } from '../state/ui';
+import { useClaudeSettings } from '../state/claude';
+import { askAboutThread, focusFile } from '../state/ui';
 import { CommentEditor } from './CommentEditor';
 import { loadFile } from './useFileDiff';
 
@@ -223,6 +224,14 @@ export function ThreadCard({
   const replyBox = useRef<HTMLTextAreaElement>(null);
   const key = snapshot.key;
   const panel = variant === 'panel';
+  const claudeOn = useClaudeSettings((s) => s.enabled);
+  // Ask Claude about this thread: the conversation opens with the thread over its box.
+  const askClaude = claudeOn && (
+    <Button size="sm" variant="ghost" title="Ask Claude about this conversation" onClick={() => askAboutThread(key, thread.id)} className="ml-auto flex-none">
+      <Icon name="comment" size={13} />
+      Ask Claude
+    </Button>
+  );
   const first = thread.comments[0];
   const tone = tierTone(thread.anchor);
   const showTier = thread.isOutdated && !thread.fileLevel;
@@ -418,6 +427,7 @@ export function ThreadCard({
                     Resolve
                   </Button>
                 )}
+                {!thread.isResolved && !reply.trim() && askClaude}
               </div>
               {reply.trim() && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -454,8 +464,10 @@ export function ThreadCard({
                   'This conversation was marked as resolved'
                 )}
               </span>
+              {askClaude}
             </div>
           )}
+          {!thread.isResolved && !thread.viewerCanReply && askClaude && <div className="flex px-3 py-2 border-t border-line">{askClaude}</div>}
           {error && <div className="px-3 py-2 text-del text-[12px]">{error}</div>}
         </>
       )}
