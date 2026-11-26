@@ -2,10 +2,11 @@ import { useEffect } from 'react';
 import { api } from './api';
 import { TabBar } from './components/TabBar';
 import { refreshInbox } from './state/inbox';
-import { checkSoon, startSessionEvents, useSessions } from './state/sessions';
+import { startDockTabs } from './state/dockTabs';
+import { checkSoon, loadSnapshot, startSessionEvents, useSessions } from './state/sessions';
 import { loadQuickActions, prActions, runQuickAction } from './state/quickActions';
 import { loadAppSettings } from './state/settings';
-import { activateIndex, closeTab, newTab, openPr, openPrLink, openSettings, popOutKey, restoreTabs, useTabs } from './state/tabs';
+import { activate, activateIndex, closePrTabs, closeTab, newTab, openPr, openPrLink, openSettings, popOutKey, restoreTabs, useTabs } from './state/tabs';
 import { getPrUi, openFind, setPrefs, showSearch, stepFind, updateUi, usePrefs } from './state/ui';
 import { NewTab } from './views/newtab/NewTab';
 import { SettingsView } from './views/newtab/SettingsView';
@@ -33,7 +34,9 @@ export function App() {
   const { tabs, activeId } = useTabs();
 
   useEffect(() => {
-    const stopEvents = startSessionEvents();
+    const stopEvents = startSessionEvents(closePrTabs);
+    const stopDock = startDockTabs();
+    const stopActivate = api.onActivateTab(activate);
     void loadAppSettings();
     const onFocus = () => {
       void loadAppSettings();
@@ -49,7 +52,10 @@ export function App() {
     const inboxTimer = setInterval(() => void refreshInbox(true, true), 3 * 60_000);
     const stopUpdates = popOutKey ? () => undefined : startUpdateChecks();
     const first = useTabs.getState().tabs[0];
-    if (popOutKey && first?.kind === 'pr') void openPr(popOutKey, first.id);
+    if (popOutKey && first?.kind === 'pr') {
+      const key = popOutKey;
+      void openPr(key, first.id).then(() => loadSnapshot(key));
+    }
     // PR links from the browser extension or prreview:// links. The ones that came before the page listened (like
     // the link that launched the app) are collected after the restored tabs, so the link's tab ends up in front.
     const stopOpen = api.onOpenPr(openPrLink);
@@ -96,6 +102,8 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => {
       stopEvents();
+      stopDock();
+      stopActivate();
       stopMenu();
       stopOpen();
       clearInterval(inboxTimer);

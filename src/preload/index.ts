@@ -1,10 +1,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import { API_METHODS, type Api, type MenuAction } from '../shared/ipc';
+import { API_METHODS, type Api, type DockTab, type MenuAction } from '../shared/ipc';
 import type { PrEvent } from '../shared/model';
 
 const invokers = Object.fromEntries(
   API_METHODS.map((method) => [method, (...args: unknown[]) => ipcRenderer.invoke(`api:${method}`, ...args)]),
-) as unknown as Omit<Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks'>;
+) as unknown as Omit<Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks' | 'reportTabs' | 'onActivateTab'>;
 
 const api: Api = {
   ...invokers,
@@ -30,6 +30,14 @@ const api: Api = {
     };
   },
   takePendingLinks: () => ipcRenderer.invoke('links:take') as Promise<string[]>,
+  reportTabs: (tabs: DockTab[]) => ipcRenderer.send('tabs:report', tabs),
+  onActivateTab(listener) {
+    const handler = (_event: IpcRendererEvent, id: string) => listener(id);
+    ipcRenderer.on('tabs:activate', handler);
+    return () => {
+      ipcRenderer.off('tabs:activate', handler);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -1,8 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fixPath } from '../core/env';
+import type { DockTab } from '../shared/ipc';
 import { markStay, prFromAppUrl } from '../shared/prInput';
 import { checkForUpdate, currentVersion } from './updates';
 import { appTheme, DEFAULT_APP_THEME } from '../shared/themes';
@@ -98,7 +99,11 @@ function createWindow(popOutKey?: string): BrowserWindow {
   const id = win.webContents.id;
   // A reload or a closed window stops listening until its page asks again.
   win.webContents.on('did-navigate', () => linkReady.delete(id));
-  win.on('closed', () => linkReady.delete(id));
+  const winId = win.id;
+  win.on('closed', () => {
+    linkReady.delete(id);
+    if (windowTabs.delete(winId)) updateDockMenu();
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(markStay(url));
     return { action: 'deny' };
@@ -127,6 +132,59 @@ function openFromUrl(url: string): void {
   // macOS keeps the app running without windows: open one, and its page collects the link.
   if (!win && started) createWindow();
 }
+
+/** Each tab bar window's PR tabs, as its page reports them, by window id: the Dock menu lists them. */
+const windowTabs = new Map<number, DockTab[]>();
+
+/**
+ * The Dock menu (right-click the app's icon): every PR tab, grouped by window, the one in front ticked; picking one
+ * brings its window forward on that tab. macOS adds the windows themselves (by title) and its own items.
+ */
+function updateDockMenu(): void {
+  if (!app.dock) return;
+  const items: MenuItemConstructorOptions[] = [];
+  for (const win of BrowserWindow.getAllWindows()) {
+    const tabs = windowTabs.get(win.id);
+    if (!tabs?.length) continue;
+    if (items.length > 0) items.push({ type: 'separator' });
+    for (const tab of tabs) {
+      items.push({
+        label: tab.label,
+        type: 'checkbox',
+        checked: tab.active,
+        click: () => {
+          if (win.isDestroyed()) return;
+          bringToFront(win);
+          win.webContents.send('tabs:activate', tab.id);
+        },
+      });
+    }
+  }
+  if (items.length > 0) items.push({ type: 'separator' });
+  items.push({
+    label: 'New Tab',
+    click: () => {
+      const win = mainWindow();
+      if (!win) {
+        createWindow();
+        return;
+      }
+      bringToFront(win);
+      win.webContents.send('menu', 'new-tab');
+    },
+  });
+  app.dock.setMenu(Menu.buildFromTemplate(items));
+}
+
+ipcMain.on('tabs:report', (event, tabs: unknown) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || popOuts.has(win) || !Array.isArray(tabs)) return;
+  windowTabs.set(
+    win.id,
+    tabs.map((t: Partial<DockTab>) => ({ id: String(t.id), label: String(t.label).slice(0, 120), active: t.active === true })),
+  );
+  updateDockMenu();
+});
 
 ipcMain.handle('links:take', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -280,6 +338,7 @@ void app.whenReady().then(async () => {
   registerIpc(registry.api());
   app.setAboutPanelOptions({ applicationName: 'PR Review', applicationVersion: currentVersion() });
   buildMenu();
+  updateDockMenu();
   createWindow();
   started = true;
   app.on('activate', () => {

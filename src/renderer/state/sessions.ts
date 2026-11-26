@@ -17,8 +17,14 @@ interface SessionsState {
 
 export const useSessions = create<SessionsState>(() => ({ snapshots: {}, previews: {}, runs: {}, progress: {}, errors: {}, checkedAt: {} }));
 
-export function startSessionEvents(): () => void {
+/** Listens to the main process's PR events; `onClosed` closes the tabs of a PR whose session ended there. */
+export function startSessionEvents(onClosed: (key: string) => void): () => void {
   return api.onPrEvent((event) => {
+    if (event.type === 'closed') {
+      forgetSession(event.key);
+      onClosed(event.key);
+      return;
+    }
     if (event.type === 'snapshot') rememberSnapshot(event.snapshot);
     useSessions.setState((s) => {
       if (event.type === 'snapshot') {
@@ -64,6 +70,14 @@ export async function loadRuns(key: string): Promise<void> {
 export function dismissRun(key: string, id: string): void {
   void api.dismissQuickActionRun(id);
   useSessions.setState((s) => ({ runs: { ...s.runs, [key]: (s.runs[key] ?? []).filter((r) => r.id !== id) } }));
+}
+
+/** The PR's current snapshot, for a window that opens on a session that's already loaded (a popped-out tab). */
+export async function loadSnapshot(key: string): Promise<void> {
+  const snapshot = await api.getSnapshot(key).catch(() => null);
+  if (!snapshot || useSessions.getState().snapshots[key]) return;
+  rememberSnapshot(snapshot);
+  useSessions.setState((s) => ({ snapshots: { ...s.snapshots, [key]: snapshot }, checkedAt: { ...s.checkedAt, [key]: snapshot.syncedAt } }));
 }
 
 export function setSessionError(key: string, message: string | undefined): void {

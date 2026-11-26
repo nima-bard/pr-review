@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SearchItem, StaleWorktree } from '../../../shared/model';
+import { BLOCKER_LABEL, blockerHint, canForceRemove, confirmText } from '../../../shared/labels';
 import { formatPrRef, prViewFromUrl } from '../../../shared/prInput';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, Kbd, Label, Segmented, Spinner, timeAgo } from '../../components/ui';
@@ -37,99 +38,145 @@ export function NewTab({ tabId }: { tabId: string }) {
 }
 
 /**
- * Worktrees left behind by pull requests that are merged or closed, with one button to remove them (after a
- * confirming second click). Only worktrees PR Review created are removed; the rest are named with why they stay.
+ * Worktrees left behind by pull requests that are merged or closed, each with its own Remove and all with Clean up
+ * (both after a confirming second click); removing one closes its PR's tabs. The ones that would lose something are
+ * listed too, with why, and Force remove where that only loses changes or stray commits. Rechecked whenever this New tab comes to the front or a PR tab closes.
  */
-function StaleWorktrees() {
+function StaleWorktrees({ tabId }: { tabId: string }) {
   const [items, setItems] = useState<StaleWorktree[] | null>(null);
   const [showList, setShowList] = useState(false);
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState<'all' | string | null>(null);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ removed: number; failed: string[] } | null>(null);
-  const load = () => api.staleWorktrees().then(setItems, () => setItems([]));
+  const active = useTabs((s) => s.activeId === tabId);
+  const openKeys = useOpenKeys();
+  const openSig = [...openKeys].sort().join(' ');
+  const seq = useRef(0);
+  const load = async () => {
+    const n = ++seq.current;
+    const list = await api.staleWorktrees().catch(() => []);
+    if (n === seq.current) setItems(list);
+  };
   useEffect(() => {
-    void load();
-  }, []);
+    if (active) void load();
+  }, [active, openSig]);
   if (!items) return null;
   const removable = items.filter((i) => !i.keep);
   const kept = items.filter((i) => i.keep);
-  if (removable.length === 0 && !outcome) return null;
+  if (items.length === 0 && !outcome) return null;
 
-  const clean = async () => {
-    if (!confirm) {
-      setConfirm(true);
-      return;
-    }
-    setConfirm(false);
+  const remove = async (list: StaleWorktree[], force = false) => {
+    setConfirm(null);
     setBusy(true);
     const failed: string[] = [];
-    for (const i of removable) {
+    for (const i of list) {
       try {
-        await api.removeWorktree(i.worktree.repoPath, i.worktree.path);
+        await api.removePrWorktree(i.worktree.repoPath, i.worktree.path, i.key, force);
       } catch (err) {
-        failed.push(`${i.worktree.path}: ${errorText(err)}`);
+        failed.push(errorText(err));
       }
     }
     setBusy(false);
-    setOutcome({ removed: removable.length - failed.length, failed });
+    setOutcome({ removed: list.length - failed.length, failed });
     await load();
   };
+  const cleanUp = () => {
+    if (confirm !== 'all') {
+      setConfirm('all');
+      setShowList(true);
+      return;
+    }
+    void remove(removable);
+  };
+  const removeOne = (i: StaleWorktree) => {
+    if (confirm !== i.worktree.path) {
+      setConfirm(i.worktree.path);
+      return;
+    }
+    void remove([i], i.keep !== null);
+  };
   const n = removable.length;
+  const plural = (k: number) => (k === 1 ? '' : 's');
+  const anyOpen = removable.some((i) => i.open || openKeys.has(i.key));
+  const title =
+    n > 0
+      ? `${n} worktree${plural(n)} of merged or closed pull requests can be removed`
+      : kept.length > 0
+        ? `${kept.length} worktree${plural(kept.length)} of merged or closed pull requests ${kept.length === 1 ? 'was' : 'were'} kept`
+        : 'Worktrees cleaned up';
 
   return (
-    <section aria-labelledby="stale-h" className="flex flex-col gap-2 px-3.5 py-3 rounded-[10px] border border-line-2 bg-subtle">
+    <section aria-labelledby="stale-h" className="flex flex-col gap-2 px-3.5 py-3 rounded-[10px] border border-info-line bg-info-subtle">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Icon name="folder" className="text-muted" />
-        {n > 0 ? (
-          <h2 id="stale-h" className="font-semibold text-strong">
-            {n} local worktree{n === 1 ? '' : 's'} for merged or closed pull requests
-          </h2>
-        ) : (
-          <h2 id="stale-h" className="font-semibold text-strong">
-            Worktrees cleaned up
-          </h2>
-        )}
-        {n > 0 && (
+        <Icon name="folder" className="text-info" />
+        <h2 id="stale-h" className="font-semibold text-strong">
+          {title}
+        </h2>
+        {n > 0 && kept.length > 0 && <Badge tone="warn">{kept.length} kept</Badge>}
+        {items.length > 0 && (
           <button type="button" aria-expanded={showList} onClick={() => setShowList(!showList)} className="text-[12.5px] text-link hover:underline cursor-pointer">
             {showList ? 'Hide' : 'Show'}
           </button>
         )}
         <span className="flex-1" />
-        {outcome && (
+        {outcome && outcome.removed > 0 && (
           <span className="text-[12.5px] text-add">
-            Removed {outcome.removed} worktree{outcome.removed === 1 ? '' : 's'}.
+            Removed {outcome.removed} worktree{plural(outcome.removed)}.
           </span>
         )}
         {n > 0 && (
-          <Button size="sm" variant={confirm ? 'danger' : 'secondary'} disabled={busy} onClick={() => void clean()}>
-            {busy ? 'Removing…' : confirm ? `Remove ${n} worktree${n === 1 ? '' : 's'}` : 'Clean up'}
+          <Button size="sm" variant={confirm === 'all' ? 'danger' : 'primary'} disabled={busy} onClick={cleanUp}>
+            {busy ? 'Removing…' : confirm === 'all' ? `Remove ${n === 1 ? 'it' : `all ${n}`}` : 'Clean up'}
           </Button>
         )}
       </div>
-      {showList && n > 0 && (
-        <ul className="flex flex-col gap-1 pl-7">
-          {removable.map((i) => (
-            <li key={i.worktree.path} className="flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
+      {showList && items.length > 0 && (
+        <ul className="flex flex-col gap-1.5 pl-7">
+          {[...removable, ...kept].map((i) => (
+            <li key={i.worktree.path} className="flex items-center gap-2 text-[12.5px] min-w-0">
               <Badge tone={i.state === 'MERGED' ? 'purple' : 'bad'}>{i.state === 'MERGED' ? 'Merged' : 'Closed'}</Badge>
-              <span className="text-fg">
-                {i.worktree.slug}#{i.worktree.prNumber} {i.title}
+              <span className={cx('truncate min-w-0', i.keep ? 'text-muted' : 'text-fg')} title={i.title}>
+                {i.worktree.slug}#{i.number} {i.title}
               </span>
-              <span className="text-muted">{timeAgo(i.closedAt)}</span>
-              <span className="font-mono text-[11.5px] text-faint truncate min-w-0">{i.worktree.path}</span>
+              <span className="text-muted whitespace-nowrap">{timeAgo(i.closedAt)}</span>
+              {(i.open || openKeys.has(i.key)) && (
+                <Badge tone="info" className="flex-none">
+                  Open in a tab
+                </Badge>
+              )}
+              {!i.worktree.owned && (
+                <span title={`Made outside PR Review${i.worktree.branch ? `; the branch ${i.worktree.branch} stays` : ''}`} className="flex-none">
+                  <Badge tone="muted">Yours</Badge>
+                </span>
+              )}
+              <span className="font-mono text-[11.5px] text-faint truncate min-w-0 flex-1" title={i.worktree.path}>
+                {i.worktree.path}
+              </span>
+              {i.keep && (
+                <span title={blockerHint(i.keep, i.worktree.locked)} className="flex-none">
+                  <Badge tone="warn">{BLOCKER_LABEL[i.keep]}</Badge>
+                </span>
+              )}
+              {(!i.keep || canForceRemove(i.keep)) && (
+                <Button size="sm" variant={confirm === i.worktree.path ? 'danger' : 'secondary'} disabled={busy} onClick={() => removeOne(i)} className="flex-none">
+                  {confirm === i.worktree.path ? confirmText(i.keep) : i.keep ? 'Force remove' : 'Remove'}
+                </Button>
+              )}
             </li>
           ))}
         </ul>
+      )}
+      {showList && n > 0 && (
+        <p className="text-[12px] text-muted pl-7">
+          {anyOpen ? 'Removing a worktree closes its pull request’s tabs. ' : ''}
+          Branches stay, but files git ignores in a worktree (like .env files or build output) go with it.
+        </p>
       )}
       {outcome?.failed.map((f) => (
         <span key={f} className="text-[12px] text-del pl-7">
           {f}
         </span>
       ))}
-      {kept.length > 0 && (
-        <span className="text-[12px] text-muted pl-7">
-          Kept: {kept.map((i) => `${i.worktree.slug}#${i.worktree.prNumber} (${i.keep})`).join(', ')}.
-        </span>
-      )}
     </section>
   );
 }
@@ -319,7 +366,7 @@ function ForYou({ tabId }: { tabId: string }) {
           </div>
         )}
       </section>
-      <StaleWorktrees />
+      <StaleWorktrees tabId={tabId} />
 
       {error && <ErrorBox message={error} onRetry={() => void refreshInbox(true)} />}
       {loading && sections.length === 0 && <Spinner label="Loading your pull requests…" />}

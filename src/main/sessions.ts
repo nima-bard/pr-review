@@ -9,8 +9,9 @@ import { GhTokenProvider } from '../core/github/auth';
 import { endpointsFor, GitHubClient } from '../core/github/client';
 import { fetchPrSummary, fetchViewer } from '../core/github/pr';
 import { inbox, searchPrs } from '../core/github/search';
-import { git } from '../core/git/exec';
-import { listWorktrees, removeWorktree, samePath } from '../core/git/worktrees';
+import { filterSuggestions } from '../core/github/suggestions';
+import { canonicalPath, listWorktrees, removalBlocker, removeWorktree, samePath } from '../core/git/worktrees';
+import { closedPrsFor, type ClosedPr, type PrLookup } from '../core/github/closedPrs';
 import { mergeMappings, remotesOf, scanRoots } from '../core/repos/registry';
 import { AppState } from '../core/store/appState';
 import { DraftStore } from '../core/store/drafts';
@@ -20,6 +21,7 @@ import { checkForUpdate } from './updates';
 import { PrSession, type SessionEvent } from './session';
 import { ActionRunner, installedTerminals, openInTerminal } from './quickActions';
 import { actionEnv } from '../shared/quickActions';
+import { BLOCKER_LABEL, canForceRemove } from '../shared/labels';
 
 export interface RegistryHost {
   userDataDir: string;
@@ -187,49 +189,43 @@ export class SessionRegistry {
 
   /**
    * Worktrees whose pull request is merged or closed (one GraphQL query per repository), for the New tab's clean-up.
-   * `keep` says why one stays: only worktrees PR Review created are removed, never locked ones, ones with
-   * uncommitted changes, or ones whose PR is open in a tab.
+   * PR Review's own are matched by the number in their name, any other by the PR branch it has checked out; the
+   * clone itself never. `keep` says why one can't simply be removed (`removalBlocker`).
    */
   private async staleWorktrees(): Promise<StaleWorktree[]> {
-    const candidates = (await this.allWorktrees()).filter((w) => !w.isPrimary && w.prNumber !== null && w.slug !== null);
+    const lookupOf = (w: WorktreeInfo): PrLookup | null =>
+      w.owned && w.prNumber !== null ? { number: w.prNumber } : w.branch ? { branch: w.branch } : w.prNumber !== null ? { number: w.prNumber } : null;
+    const candidates = (await this.allWorktrees()).filter((w) => !w.isPrimary && w.slug !== null && lookupOf(w) !== null);
     const bySlug = new Map<string, WorktreeInfo[]>();
     for (const w of candidates) bySlug.set(w.slug!, [...(bySlug.get(w.slug!) ?? []), w]);
     const out: StaleWorktree[] = [];
     for (const [slug, list] of bySlug) {
-      const [owner, repo] = slug.split('/');
-      const numbers = [...new Set(list.map((w) => w.prNumber!))];
-      // issueOrPullRequest: a worktree named after a number that isn't a pull request just comes back empty.
-      const fields = numbers.map((n) => `n${n}: issueOrPullRequest(number: ${n}) { ... on PullRequest { state title closedAt } }`).join('\n');
-      type Pr = { state?: string; title?: string; closedAt?: string | null } | null;
-      let found: Record<string, Pr>;
+      const [owner = '', repo = ''] = slug.split('/');
+      let prs: (ClosedPr | null)[];
       try {
-        const data = await this.client('github.com').graphql<{ repository: Record<string, Pr> | null }>(
-          `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { ${fields} } }`,
-        );
-        found = data.repository ?? {};
+        prs = await closedPrsFor(this.client('github.com'), owner, repo, list.map((w) => lookupOf(w)!));
       } catch {
         continue;
       }
-      for (const w of list) {
-        const pr = found[`n${w.prNumber}`];
-        if (!pr || (pr.state !== 'MERGED' && pr.state !== 'CLOSED')) continue;
-        const dirty = await git(w.path, ['status', '--porcelain']).then(
-          (o) => o.trim() !== '',
-          () => false,
-        );
-        const keep = !w.owned
-          ? 'not created by PR Review'
-          : w.locked !== null
-            ? 'locked'
-            : this.sessions.has(`github.com/${slug}#${w.prNumber}`.toLowerCase())
-              ? 'open in a tab'
-              : dirty
-                ? 'has uncommitted changes'
-                : null;
-        out.push({ worktree: w, state: pr.state, title: pr.title ?? '', closedAt: pr.closedAt ?? null, keep });
+      for (const [i, w] of list.entries()) {
+        const pr = prs[i];
+        if (!pr) continue;
+        const key = prKey({ host: 'github.com', owner, repo, number: pr.number });
+        out.push({ worktree: w, key, ...pr, keep: await removalBlocker(w), open: this.sessions.has(key) });
       }
     }
     return out;
+  }
+
+  /** Ends the sessions of `key` and of any PR shown from the worktree at `path`, and tells every window to close their tabs. */
+  private closeSessionsAt(path: string, key: string): void {
+    for (const [k, s] of [...this.sessions]) {
+      if (k !== key && !(s.worktreePath && samePath(s.worktreePath, path))) continue;
+      s.dispose();
+      this.sessions.delete(k);
+      this.host.emit({ type: 'closed', key: k });
+    }
+    this.host.emit({ type: 'closed', key });
   }
 
   api(): Pick<Api, InvokeMethods> {
@@ -333,12 +329,39 @@ export class SessionRegistry {
       listCommits: (key) => this.session(key).listCommits(),
       setCompare: (key, from, label) => this.session(key).setCompare(from, label),
       search: (query, after) => searchPrs(this.client('github.com'), 'github.com', query, after),
+      filterSuggestions: async (repo, kind, query) => {
+        const [owner, name] = repo.split('/');
+        return owner && name ? filterSuggestions(this.client('github.com'), owner, name, kind, query) : [];
+      },
       inbox: () => inbox(this.client('github.com'), 'github.com'),
       listWorktrees: () => this.allWorktrees(),
       staleWorktrees: () => this.staleWorktrees(),
       removeWorktree: async (repoPath, path) => {
         await removeWorktree(repoPath, path);
         await this.appState.removeOwnedWorktree(path);
+      },
+      worktreeRemoval: async (key) => {
+        const snap = this.sessions.get(key)?.current;
+        if (!snap) return null;
+        const list = await listWorktrees(snap.clonePath).catch(() => []);
+        const index = list.findIndex((w) => samePath(w.path, canonicalPath(snap.worktree.path)));
+        const wt = list[index];
+        if (!wt || index === 0) return null;
+        const owned = (await this.appState.ownedWorktrees()).some((p) => samePath(p, wt.path));
+        return { repoPath: snap.clonePath, path: wt.path, owned, branch: wt.branch, blocker: await removalBlocker(wt) };
+      },
+      removePrWorktree: async (repoPath, path, key, force = false) => {
+        const list = await listWorktrees(repoPath);
+        const index = list.findIndex((w) => samePath(w.path, canonicalPath(path)));
+        const wt = list[index];
+        if (!wt) throw new Error(`There’s no worktree at ${path} any more.`);
+        if (index === 0) throw new Error(`${path} is the clone itself, not a worktree.`);
+        const blocker = await removalBlocker(wt);
+        if (blocker && !(force && canForceRemove(blocker))) throw new Error(`${path} can’t be removed: ${BLOCKER_LABEL[blocker].toLowerCase()}.`);
+        await removeWorktree(repoPath, wt.path, blocker !== null);
+        await this.appState.removeOwnedWorktree(path);
+        if (!samePath(path, wt.path)) await this.appState.removeOwnedWorktree(wt.path);
+        this.closeSessionsAt(wt.path, key);
       },
       listRepos: () => this.repoMappings(),
       rescanRepos: () => this.repoMappings(true),

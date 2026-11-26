@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
-import type { PrPreview, PrSnapshot } from '../../../shared/model';
+import { useEffect, useRef, useState } from 'react';
+import type { PrPreview, PrSnapshot, WorktreeRemoval } from '../../../shared/model';
+import { BLOCKER_LABEL, blockerHint, canForceRemove, confirmText } from '../../../shared/labels';
 import { api, errorText } from '../../api';
-import { Avatar, Badge, Button, Label, Markdown, shortSha, Skeleton, Spinner, timeAgo } from '../../components/ui';
+import { Avatar, Badge, Button, Icon, Label, Markdown, shortSha, Skeleton, Spinner, timeAgo } from '../../components/ui';
 import { updateUi } from '../../state/ui';
 import { ReviewerPicker } from './ReviewerPicker';
 import { ReviewThreads, threadGroup } from './ReviewThreads';
@@ -88,6 +89,86 @@ function CommentSkeleton() {
  * preview): what needs the checkout (review threads, files viewed, the worktree) then shows as loading, and comments
  * can be read but not yet changed.
  */
+/**
+ * The banner on a merged or closed pull request: offers to remove its worktree (and close its tabs), unless it's the
+ * clone itself, or says why it stays when removing it would lose something. Checked again with every sync.
+ */
+function WorktreeBanner({ snapshot }: { snapshot: PrSnapshot }) {
+  const [info, setInfo] = useState<WorktreeRemoval | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    void api.worktreeRemoval(snapshot.key).then(
+      (r) => current && setInfo(r),
+      () => current && setInfo(null),
+    );
+    return () => {
+      current = false;
+    };
+  }, [snapshot.key, snapshot.syncedAt]);
+  if (!info) return null;
+  const state = snapshot.details.state === 'MERGED' ? 'merged' : 'closed';
+  const blocker = info.blocker;
+  if (blocker && !canForceRemove(blocker)) {
+    return (
+      <div className="flex flex-wrap items-center gap-2.5 px-3.5 py-2.5 rounded-[10px] bg-info-subtle border border-info-line text-[12.5px]">
+        <Icon name="folder" className="text-info" />
+        <span className="text-fg">This pull request is {state}. Its worktree can’t be removed:</span>
+        <span title={blockerHint(blocker, null)}>
+          <Badge tone="warn">{BLOCKER_LABEL[blocker]}</Badge>
+        </span>
+        <span className="font-mono text-[11.5px] text-faint truncate min-w-0" title={info.path}>
+          {info.path}
+        </span>
+      </div>
+    );
+  }
+  const remove = async () => {
+    if (!confirm) {
+      setConfirm(true);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // On success the session ends and this tab closes.
+      await api.removePrWorktree(info.repoPath, info.path, snapshot.key, blocker !== null);
+    } catch (err) {
+      setError(errorText(err));
+      setConfirm(false);
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-label="Worktree" className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3 rounded-[10px] bg-info-subtle border border-info-line">
+      <Icon name="folder" className="text-info" />
+      <div className="flex-1 min-w-[260px] flex flex-col gap-0.5">
+        <span className="flex flex-wrap items-center gap-2 font-semibold text-strong">
+          {blocker ? `This pull request is ${state}; its worktree has` : `This pull request is ${state}: its worktree can be removed`}
+          {blocker && (
+            <span title={blockerHint(blocker, null)}>
+              <Badge tone="warn">{BLOCKER_LABEL[blocker]}</Badge>
+            </span>
+          )}
+        </span>
+        <span className="font-mono text-[11.5px] text-muted truncate" title={info.path}>
+          {info.path}
+        </span>
+        {!info.owned && (
+          <span className="text-[12px] text-muted">You made this worktree. {info.branch ? `The branch ${info.branch} stays, but` : 'Its'} files git ignores in it go too.</span>
+        )}
+        {error && <span className="text-[12px] text-del">{error}</span>}
+      </div>
+      <Button size="sm" variant={confirm ? 'danger' : blocker ? 'secondary' : 'primary'} disabled={busy} onClick={() => void remove()}>
+        <Icon name="trash" size={13} />
+        {busy ? 'Removing…' : confirm ? (blocker ? confirmText(blocker) : 'Remove and close this tab') : blocker ? 'Force remove' : 'Remove worktree'}
+      </Button>
+    </section>
+  );
+}
+
 export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot | undefined }) {
   const d = pr.details;
   const loaded = snapshot !== undefined;
@@ -134,6 +215,7 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
         <div className="max-w-[1200px] mx-auto flex flex-col gap-4">
           {snapshot ? (
             <>
+              {d.state !== 'OPEN' && <WorktreeBanner snapshot={snapshot} />}
               <SinceLastReview snapshot={snapshot} />
               <ReviewThreads snapshot={snapshot} />
             </>
@@ -319,7 +401,8 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
             </div>
           ) : d.state === 'CLOSED' ? (
             <div className="text-[12.5px] text-muted">Closed without merging</div>
-          ) : (
+          ) : null}
+          {d.state === 'OPEN' && (
             <div className="flex flex-col gap-1 text-[12.5px] text-fg">
               <span>{d.mergeable === 'CONFLICTING' ? 'Has conflicts with ' : d.mergeable === 'MERGEABLE' ? 'No conflicts with ' : 'Checking for conflicts with '}{d.baseRefName}</span>
               <span className="text-muted">{MERGE_STATE[d.mergeStateStatus] ?? d.mergeStateStatus.toLowerCase().replace(/_/g, ' ')}</span>

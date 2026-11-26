@@ -27,6 +27,7 @@
   --c-faint: #9ca4b3;
   --c-dim: #5d6577;
   --c-accent: #8ab8ff;
+  --c-primary: var(--c-accent);
   --c-ink: #0b0d12;
   --c-link: #4493f8;
   --c-add: #6fdc95;
@@ -122,6 +123,7 @@
   --c-faint: #b7bdc8;
   --c-dim: #848d9b;
   --c-accent: #9ecbff;
+  --c-primary: var(--c-accent);
   --c-ink: #010409;
   --c-link: #74b9ff;
   --c-add: #6ef09a;
@@ -180,7 +182,7 @@
   --pl-range: #dbb7ff;
 }
 
-/* Slate: Hydra's slate surfaces (#242533, #1e1f2d, #2a2c3c), cyan accent. Its code theme is Hydra (renderer/diff/codeThemes.ts); --pl-* use Hydra's colours. */
+/* Slate: Hydra's slate surfaces (#242533, #1e1f2d, #2a2c3c), cyan accent, buttons in Hydra's pink (its keyword colour). Its code theme is Hydra (renderer/diff/codeThemes.ts); --pl-* use Hydra's colours. */
 [data-theme='slate'] {
   color-scheme: dark;
   --c-bg: #242533;
@@ -201,6 +203,7 @@
   --c-faint: #868d9c;
   --c-dim: #5c6370;
   --c-accent: #5ccfe6;
+  --c-primary: #ff407b;
   --c-ink: #14151f;
   --c-link: #5ccfe6;
   --c-add: #7ddc9f;
@@ -280,6 +283,7 @@
   --c-faint: #6e7781;
   --c-dim: #8c959f;
   --c-accent: #0969da;
+  --c-primary: var(--c-accent);
   --c-ink: #ffffff;
   --c-link: #0969da;
   --c-add: #1a7f37;

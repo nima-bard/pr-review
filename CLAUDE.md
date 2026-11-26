@@ -51,7 +51,7 @@ A change is done when `npm run typecheck` and `npm test` pass. Run `npm run e2e`
 - **Comments:** short plain-English doc comments on exports and on anything non-obvious, saying what the code is for rather than restating it.
 - **UI text:**
   - Plain and in sentence case, with "pull request" written out and typographic apostrophes and quotes (’ “ ”).
-  - User-facing changes go in `CHANGELOG.md` under the next version, written the same way.
+  - User-facing changes go in `CHANGELOG.md` under `## Unreleased` (fixes under `### Fixes`), written the same way. Releasing renames that section to the version.
 - **Styling:**
   - Tailwind v4 with the theme tokens from `src/renderer/styles.css` (`bg-panel`, `bg-side`, `text-muted`, `text-strong`, `border-line`, `text-add`, `text-del`…), never raw colours.
   - Every theme in `themes.css` defines them, light and dark.

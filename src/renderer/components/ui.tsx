@@ -21,7 +21,7 @@ export function Button({ variant = 'secondary', size = 'md', className, ...rest 
       className={cx(
         'inline-flex items-center justify-center gap-1.5 rounded-[7px] font-medium whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-default',
         size === 'sm' ? 'h-[26px] px-2.5 text-[12px]' : 'h-8 px-3 text-[13px]',
-        variant === 'primary' && 'bg-accent text-ink font-semibold hover:brightness-110',
+        variant === 'primary' && 'bg-primary text-ink font-semibold hover:brightness-110',
         variant === 'secondary' && 'bg-raised-2 border border-line-2 text-fg hover:bg-btn-hover',
         variant === 'ghost' && 'text-muted hover:text-fg hover:bg-raised',
         variant === 'danger' && 'bg-del-bg border border-del-line text-del hover:brightness-110',

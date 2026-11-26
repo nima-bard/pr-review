@@ -2,12 +2,9 @@ import { api } from '../api';
 import { dismissUpdate, useUpdates } from '../state/updates';
 import { useWaitingCount } from '../state/inbox';
 import { useSessions } from '../state/sessions';
-import { activate, closeTab, moveTab, newTab, popOutKey, popOutTab, useTabs, type Tab } from '../state/tabs';
+import { activate, closeTab, moveTab, newTab, popOutKey, popOutTab, repoOfKey, useTabs, type Tab } from '../state/tabs';
 import { Avatar, cx, Icon } from './ui';
 import { MARKER_CLASS, useTabReorder } from './useTabReorder';
-
-/** "owner/repo" from a PR key like "github.com/owner/repo#12". */
-const repoOfKey = (key: string) => /([^/]+\/[^/]+)#\d+$/.exec(key)?.[1] ?? key;
 
 function TabLabel({ tab, showRepo }: { tab: Tab; showRepo: boolean }) {
   const snapshot = useSessions((s) => (tab.kind === 'pr' ? s.snapshots[tab.key] : undefined));

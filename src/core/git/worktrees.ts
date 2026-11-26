@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import type { RemovalBlocker } from '../../shared/model';
 import { gh, git } from './exec';
 
 /** Resolves symlinks (macOS /var -> /private/var) for the longest existing prefix of `p`. */
@@ -130,10 +131,28 @@ export async function moveOwnedDetached(path: string, headOid: string): Promise<
   return 'moved';
 }
 
-export async function removeWorktree(repo: string, path: string): Promise<void> {
+/**
+ * Why removing this worktree would lose something, or null when it wouldn't: it's locked (another tool is using it),
+ * it has uncommitted changes (untracked files too), or its detached HEAD is on no branch or other ref. A branch
+ * outlives its worktree, so commits on one are never lost. Files git ignores are not checked: they go with it.
+ */
+export async function removalBlocker(wt: Pick<Worktree, 'path' | 'head' | 'detached' | 'locked'>): Promise<RemovalBlocker | null> {
+  if (wt.locked !== null) return 'locked';
+  const status = await git(wt.path, ['status', '--porcelain', '--untracked-files=normal']).catch(() => null);
+  if (status === null) return 'unreadable';
+  if (status.trim() !== '') return 'dirty';
+  if (wt.detached && wt.head) {
+    const refs = await git(wt.path, ['for-each-ref', '--contains', wt.head, '--count=1', '--format=%(refname)']).catch(() => '');
+    if (refs.trim() === '') return 'unreachable';
+  }
+  return null;
+}
+
+/** Removes a worktree; `force` also when it has changes (they're lost). Never a locked one. */
+export async function removeWorktree(repo: string, path: string, force = false): Promise<void> {
   const target = canonicalPath(path);
   const wt = (await listWorktrees(repo)).find((w) => samePath(w.path, target));
   if (!wt) throw new Error(`No worktree at ${path}`);
   if (wt.locked !== null) throw new Error(`Worktree is locked${wt.locked ? ` (${wt.locked})` : ''}; unlock it first.`);
-  await git(repo, ['worktree', 'remove', path]);
+  await git(repo, ['worktree', 'remove', ...(force ? ['--force'] : []), path]);
 }

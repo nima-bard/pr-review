@@ -24,6 +24,8 @@
   --color-faint: var(--c-faint);
   --color-dim: var(--c-dim);
   --color-accent: var(--c-accent);
+  /* Primary buttons: the accent, except where a theme picks its own. */
+  --color-primary: var(--c-primary);
   --color-ink: var(--c-ink);
   --color-link: var(--c-link);
   --color-add: var(--c-add);

@@ -20,6 +20,9 @@ interface TabsState {
   activeId: string;
 }
 
+/** "owner/repo" from a PR key like "github.com/owner/repo#12". */
+export const repoOfKey = (key: string) => /([^/]+\/[^/]+)#\d+$/.exec(key)?.[1] ?? key;
+
 let seq = 0;
 const newId = () => `t${Date.now().toString(36)}${(seq++).toString(36)}`;
 
@@ -81,6 +84,15 @@ export function closeTab(id: string): void {
   const nextActive = activeId === id ? (rest[Math.min(idx, rest.length - 1)]?.id ?? rest[0]!.id) : activeId;
   useTabs.setState({ tabs: rest, activeId: nextActive });
   persist();
+}
+
+/** Closes every tab showing `key`, whose session has ended (its worktree was removed); a pop-out window closes. */
+export function closePrTabs(key: string): void {
+  if (popOutKey === key) {
+    window.close();
+    return;
+  }
+  for (const t of useTabs.getState().tabs) if (t.kind === 'pr' && t.key === key) closeTab(t.id);
 }
 
 /** Drag reorder: moves the tab at `from` before the one at `slot` (or to the end). Restores in the new order. */

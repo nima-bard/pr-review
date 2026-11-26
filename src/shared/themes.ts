@@ -107,7 +107,7 @@ export const APP_THEMES: AppTheme[] = [
     codeTheme: 'github-dark-high-contrast',
     background: '#010409',
   },
-  { id: 'slate', label: 'Slate', description: 'Slate blue with a cyan accent; code in the vivid Hydra colours.', kind: 'dark', codeTheme: 'hydra-plus-md', background: '#242533' },
+  { id: 'slate', label: 'Slate', description: 'Slate blue with a cyan accent and pink buttons; code in the vivid Hydra colours.', kind: 'dark', codeTheme: 'hydra-plus-md', background: '#242533' },
   { id: 'github-light', label: 'GitHub Light', description: "github.com's light theme.", kind: 'light', codeTheme: 'github-light-default', background: '#ffffff' },
 ];
 

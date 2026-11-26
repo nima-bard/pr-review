@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { listWorktrees, ownedWorktreePath, parseWorktreeList, planWorktree, removeWorktree, type Worktree } from '../../../src/core/git/worktrees';
+import { rmSync, writeFileSync } from 'node:fs';
+import { listWorktrees, ownedWorktreePath, parseWorktreeList, planWorktree, removalBlocker, removeWorktree, type Worktree } from '../../../src/core/git/worktrees';
 import { tempRepo } from '../../helpers/gitRepo';
 
 const wt = (p: Partial<Worktree> & { path: string }): Worktree => ({
@@ -96,5 +97,39 @@ describe('worktrees against real git', () => {
     repo.git('worktree', 'unlock', path);
     await removeWorktree(repo.dir, path);
     expect((await listWorktrees(repo.dir)).some((w) => w.path.endsWith('-wt'))).toBe(false);
+  });
+
+  it('says what removing a worktree would lose', async () => {
+    const base = `${repo.dir}-rb`;
+    const find = async (path: string) => (await listWorktrees(repo.dir)).find((w) => w.path.endsWith(path.split('/').pop()!))!;
+
+    // A branch worktree with commits of its own: the branch keeps them.
+    const onBranch = `${base}-branch`;
+    repo.git('worktree', 'add', '-q', '-b', 'feature', onBranch, 'HEAD');
+    repo.git('-C', onBranch, 'commit', '-q', '--allow-empty', '-m', 'more');
+    expect(await removalBlocker(await find(onBranch))).toBeNull();
+
+    writeFileSync(join(onBranch, 'notes.txt'), 'untracked\n');
+    expect(await removalBlocker(await find(onBranch))).toBe('dirty');
+    await expect(removeWorktree(repo.dir, onBranch)).rejects.toThrow();
+    rmSync(join(onBranch, 'notes.txt'));
+
+    repo.git('worktree', 'lock', onBranch);
+    expect(await removalBlocker(await find(onBranch))).toBe('locked');
+    repo.git('worktree', 'unlock', onBranch);
+
+    // A detached worktree at a commit that's on a branch, then one past it that isn't on any.
+    const detached = `${base}-detached`;
+    repo.git('worktree', 'add', '-q', '--detach', detached, 'HEAD');
+    expect(await removalBlocker(await find(detached))).toBeNull();
+    repo.git('-C', detached, 'commit', '-q', '--allow-empty', '-m', 'lost?');
+    expect(await removalBlocker(await find(detached))).toBe('unreachable');
+
+    // Force removes one with changes; the branch stays.
+    writeFileSync(join(onBranch, 'notes.txt'), 'untracked\n');
+    await removeWorktree(repo.dir, onBranch, true);
+    expect((await listWorktrees(repo.dir)).some((w) => w.path.endsWith('-branch'))).toBe(false);
+    expect(repo.git('branch', '--list', 'feature').trim()).toContain('feature');
+    repo.git('worktree', 'remove', '--force', detached);
   });
 });

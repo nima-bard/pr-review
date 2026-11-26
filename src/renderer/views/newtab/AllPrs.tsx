@@ -4,6 +4,7 @@ import { api, errorText } from '../../api';
 import { Button, cx, ErrorBox, Icon, Select, Spinner } from '../../components/ui';
 import { openPr } from '../../state/tabs';
 import { getQualifier, setQualifier, setState } from '../../../shared/query';
+import { FilterButton, FILTERS } from './FilterMenu';
 import { PrRow, useOpenKeys } from './NewTab';
 
 interface Saved {
@@ -46,86 +47,6 @@ const DEFAULT_SAVED: Saved[] = [
   { name: 'Involves me', query: 'is:pr is:open involves:@me' },
 ];
 
-const FILTERS: { key: string; label: string; placeholder: string; options?: string[] }[] = [
-  { key: 'author', label: 'Author', placeholder: 'login or @me' },
-  { key: 'label', label: 'Label', placeholder: 'label name' },
-  { key: 'review-requested', label: 'Reviewers', placeholder: 'login or @me' },
-  { key: 'assignee', label: 'Assignee', placeholder: 'login or @me' },
-  { key: 'review', label: 'Review', placeholder: '', options: ['none', 'required', 'approved', 'changes_requested'] },
-  { key: 'sort', label: 'Sort', placeholder: '', options: ['updated-desc', 'created-desc', 'comments-desc', 'reactions-desc'] },
-];
-
-function FilterButton({ filter, query, setQuery }: { filter: (typeof FILTERS)[number]; query: string; setQuery(q: string): void }) {
-  const current = getQualifier(query, filter.key);
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(current);
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => {
-          setDraft(current);
-          setOpen(!open);
-        }}
-        className={cx(
-          'flex items-center gap-1.5 h-[30px] px-2.5 rounded-[7px] border text-[12.5px] cursor-pointer',
-          current ? 'bg-info-bg border-info-line text-strong' : 'bg-raised border-line-2 text-fg',
-        )}
-      >
-        {filter.label}
-        {current && <span className="font-mono text-[11.5px] text-info">{current}</span>}
-        <Icon name="chevron" size={11} />
-      </button>
-      {open && (
-        <div role="dialog" aria-label={`Filter by ${filter.label}`} className="absolute top-9 left-0 z-20 w-[260px] rounded-[10px] bg-raised border border-line-2 p-3 flex flex-col gap-2 shadow-xl">
-          <div className="font-semibold text-strong">Filter by {filter.label.toLowerCase()}</div>
-          {filter.options ? (
-            <div className="flex flex-col">
-              {['', ...filter.options].map((o) => (
-                <label key={o} className="flex items-center gap-2 py-1 cursor-pointer">
-                  <input type="radio" name={filter.key} checked={draft === o} onChange={() => setDraft(o)} style={{ accentColor: 'var(--c-accent)' }} />
-                  <span>{o || 'Any'}</span>
-                </label>
-              ))}
-            </div>
-          ) : (
-            <input
-              autoFocus
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setQuery(setQualifier(query, filter.key, draft.trim()));
-                  setOpen(false);
-                }
-              }}
-              placeholder={filter.placeholder}
-              aria-label={filter.label}
-              className="h-[30px] px-2.5 rounded-[7px] bg-side border border-line-2 text-[12.5px] outline-none focus:border-accent"
-            />
-          )}
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => {
-                setQuery(setQualifier(query, filter.key, draft.trim()));
-                setOpen(false);
-              }}
-            >
-              Apply
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function AllPrs({ tabId }: { tabId: string }) {
   const [repos, setRepos] = useState<RepoMapping[]>([]);
   const [lastRepo] = useState(loadLastRepo);
@@ -139,6 +60,7 @@ export function AllPrs({ tabId }: { tabId: string }) {
     return s.length > 0 ? s : DEFAULT_SAVED;
   });
   const [naming, setNaming] = useState<string | null>(null);
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
   const openKeys = useOpenKeys();
 
   useEffect(() => {
@@ -230,7 +152,16 @@ export function AllPrs({ tabId }: { tabId: string }) {
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {FILTERS.map((f) => (
-          <FilterButton key={f.key} filter={f} query={query} setQuery={setQuery} />
+          <FilterButton
+            key={f.key}
+            filter={f}
+            query={query}
+            repo={repo}
+            setQuery={setQuery}
+            open={openFilter === f.key}
+            onToggle={() => setOpenFilter(openFilter === f.key ? null : f.key)}
+            onClose={() => setOpenFilter((k) => (k === f.key ? null : k))}
+          />
         ))}
         <span className="flex-1" />
         <Button size="sm" variant="ghost" onClick={() => setQuery(setQualifier(DEFAULT_QUERY, 'repo', repo))}>

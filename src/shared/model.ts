@@ -317,15 +317,56 @@ export interface SetupInfo {
   folders: { path: string; repos: number }[];
 }
 
-/** A worktree whose pull request is merged or closed, for the New tab's clean-up. */
+/**
+ * A worktree whose pull request is merged or closed, for the New tab's clean-up: one PR Review made (named after the
+ * PR), or any other with the PR's branch checked out.
+ */
 export interface StaleWorktree {
   worktree: WorktreeInfo;
+  /** The pull request's key (`prKey`): removing the worktree closes its tabs. */
+  key: string;
+  number: number;
   state: 'MERGED' | 'CLOSED';
   title: string;
   closedAt: string | null;
-  /** Why it is left alone, if it is: not created here, locked, uncommitted changes, or its PR is open in a tab. */
-  keep: string | null;
+  /** Why it can't simply be removed, if it can't: see `removalBlocker`. */
+  keep: RemovalBlocker | null;
+  /** Its pull request has a session (a tab here or in another window). */
+  open: boolean;
 }
+
+/** Which list a search filter suggests from: people who can be mentioned (author), assigned (reviewers, assignee), or labels. */
+export type SuggestionKind = 'author' | 'assignee' | 'reviewer' | 'label';
+
+/** One suggestion in a search filter's menu. */
+export interface FilterSuggestion {
+  /** What goes into the query (a login, a label name). */
+  value: string;
+  label: string;
+  /** A person's name, a label's description. */
+  detail: string | null;
+  avatarUrl: string | null;
+  /** A label's colour ("#d73a4a"). */
+  color: string | null;
+}
+
+/** The PR page's offer to remove its worktree once the pull request is merged or closed. */
+export interface WorktreeRemoval {
+  repoPath: string;
+  path: string;
+  /** PR Review made it (else it's one of yours, with your branch, which stays). */
+  owned: boolean;
+  branch: string | null;
+  /** Why it can't simply be removed, if it can't: see `removalBlocker`. */
+  blocker: RemovalBlocker | null;
+}
+
+/**
+ * What removing a worktree would lose: uncommitted changes (`dirty`), commits on no branch (`unreachable`), or it's
+ * `locked` (another tool, like a Claude Code session, is using it) or git can't read it (`unreadable`).
+ */
+export type RemovalBlocker = 'dirty' | 'unreachable' | 'locked' | 'unreadable';
+
 
 export interface CommitInfo {
   sha: string;
@@ -400,7 +441,9 @@ export type PrEvent =
   /** The periodic check found nothing new (a change triggers a refresh, and with it a snapshot). */
   | { type: 'checked'; key: string; at: string }
   /** A background quick action started, printed something or finished. */
-  | { type: 'action'; key: string; run: ActionRun };
+  | { type: 'action'; key: string; run: ActionRun }
+  /** The session ended because its worktree was removed: every window closes the PR's tabs. */
+  | { type: 'closed'; key: string };
 
 export interface SubmitInput {
   event: ReviewEvent;

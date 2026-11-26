@@ -7,6 +7,7 @@ import type {
   CommitsData,
   Draft,
   EditableKind,
+  FilterSuggestion,
   FileContent,
   FileDiffModel,
   InboxSection,
@@ -24,8 +25,10 @@ import type {
   SetupInfo,
   StaleWorktree,
   SubmitInput,
+  SuggestionKind,
   UpdateInfo,
   WorktreeInfo,
+  WorktreeRemoval,
 } from './model';
 
 export interface Api {
@@ -80,11 +83,21 @@ export interface Api {
   listCommits(key: string): Promise<CommitsData>;
   setCompare(key: string, from: string | null, label: string): Promise<void>;
   search(query: string, after?: string): Promise<SearchPage>;
+  /** Suggestions for a search filter in `repo` ("owner/name"), matching what's typed. */
+  filterSuggestions(repo: string, kind: SuggestionKind, query: string): Promise<FilterSuggestion[]>;
   inbox(): Promise<InboxSection[]>;
   listWorktrees(): Promise<WorktreeInfo[]>;
   /** Worktrees whose pull request is merged or closed, and whether each can be removed. */
   staleWorktrees(): Promise<StaleWorktree[]>;
   removeWorktree(repoPath: string, path: string): Promise<void>;
+  /** The PR's worktree, if it's one that could go (not the clone itself), and why it stays if it does. */
+  worktreeRemoval(key: string): Promise<WorktreeRemoval | null>;
+  /**
+   * Removes the worktree of the merged or closed PR `key` after checking again that nothing would be lost (or, with
+   * `force`, losing its uncommitted changes or commits on no branch; never a locked one), then ends the PR's session,
+   * which closes its tabs in every window.
+   */
+  removePrWorktree(repoPath: string, path: string, key: string, force?: boolean): Promise<void>;
   listRepos(): Promise<RepoMapping[]>;
   rescanRepos(): Promise<RepoMapping[]>;
   mapRepo(slug: string): Promise<RepoMapping | null>;
@@ -119,6 +132,17 @@ export interface Api {
   onOpenPr(listener: (input: string) => void): () => void;
   /** PR links that arrived before this page listened (e.g. the one that launched the app); asking also starts delivery. */
   takePendingLinks(): Promise<string[]>;
+  /** This window's PR tabs, for the Dock menu (macOS: right-click the app's icon in the Dock). */
+  reportTabs(tabs: DockTab[]): void;
+  /** The Dock menu asks this window to switch to tab `id`. */
+  onActivateTab(listener: (id: string) => void): () => void;
+}
+
+/** A PR tab as the Dock menu lists it. */
+export interface DockTab {
+  id: string;
+  label: string;
+  active: boolean;
 }
 
 /** `accelerator`: a shortcut shown next to the item (it isn't registered by the menu). */
@@ -126,7 +150,7 @@ export type ContextMenuItem = { id: string; label: string; enabled?: boolean; ac
 
 export type MenuAction = 'new-tab' | 'close-tab' | 'settings' | 'toggle-word-wrap' | 'refresh' | 'toggle-tree' | 'toggle-conversations' | 'find-in-files' | 'show-files' | 'find' | 'find-next' | 'find-previous';
 
-export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks'>;
+export type InvokeMethods = Exclude<keyof Api, 'onPrEvent' | 'onMenu' | 'onOpenPr' | 'takePendingLinks' | 'reportTabs' | 'onActivateTab'>;
 
 export const API_METHODS = [
   'openPr',
@@ -167,10 +191,13 @@ export const API_METHODS = [
   'listCommits',
   'setCompare',
   'search',
+  'filterSuggestions',
   'inbox',
   'listWorktrees',
   'staleWorktrees',
   'removeWorktree',
+  'worktreeRemoval',
+  'removePrWorktree',
   'listRepos',
   'rescanRepos',
   'mapRepo',

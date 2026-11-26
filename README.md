@@ -70,7 +70,7 @@ Useful when testing: `PR_REVIEW_USER_DATA=<folder>` runs with a separate profile
 
 ## Releasing
 
-1. Raise `version` in `package.json`, add what changed to `CHANGELOG.md`, commit and push.
+1. Raise `version` in `package.json` and rename `CHANGELOG.md`'s `## Unreleased` section to `## <version>` (changes collect there as they're made), then commit and push.
 2. Run `npm run release:publish`. It typechecks, runs the tests, builds `pr-review-<version>-arm64.dmg`, zips the browser extension, writes `SHA256SUMS.txt` (all in `dist/release-<version>/`) and creates a **draft** GitHub release `v<version>` with those files, that version's changelog and install notes.
 3. Look over the draft on GitHub and publish it.
 

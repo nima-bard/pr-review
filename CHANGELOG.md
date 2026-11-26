@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Your pull request tabs in the Dock menu:** right-click PR Review's icon in the Dock to switch to any open pull request (the one in front is ticked), or open a new tab. A popped-out pull request's window is named after it, so macOS lists it there and in the Window menu too.
+- **Clean up worktrees of merged and closed pull requests**, now including your own worktrees that have the pull request's branch checked out (the branch stays) and ones whose pull request is open in a tab (the tab closes). Clean up removes them all, or remove them one at a time. Worktrees that would lose something are listed too, labelled (Uncommitted changes, Commits on no branch, Locked), with Force remove for the first two.
+- A merged or closed pull request shows a **banner offering to remove its worktree** and close the tab.
+- The clean-up on the New tab checks again whenever you come back to it or close a pull request's tab.
+- **Filters in All pull requests suggest as you type**, like github.com: people with their avatars (and @me) for Author, Reviewers and Assignee, the repository's labels with their colours, and the Review and Sort choices in words. Pick with the mouse or ↑ ↓ and Enter, or press Enter to filter by what you typed.
+- **Slate** theme: primary buttons in Hydra's pink.
+
+### Fixes
+
+- A pull request popped out into its own window showed "Opening pull request…" until it next changed on GitHub.
+- Filter menus in All pull requests stayed open when you opened another one or clicked elsewhere.
+
 ## 0.2.0
 
 ### Act on pull requests
