@@ -7,6 +7,7 @@ import { askClaude, useClaudeSettings } from '../state/claude';
 import { requestComposer, updateUi, usePrUi } from '../state/ui';
 import { readUnsent, unsentKey, writeUnsent, type ComposerTarget } from '../state/unsent';
 import { CommentBody } from './CommentBody';
+import { treeCompare } from '../views/pr/treeOrder';
 
 function newDraftId(): string {
   return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -42,7 +43,7 @@ export function unsentComments(prKey: string, drafts: readonly Draft[]): UnsentC
     const m = /^(.*):(LEFT|RIGHT):(\d+)-(\d+)$/.exec(rest);
     if (m) out.push({ storageKey, text, target: { path: m[1]!, side: m[2] as ComposerTarget['side'], startLine: Number(m[3]), endLine: Number(m[4]) } });
   }
-  return out.sort((a, b) => a.target.path.localeCompare(b.target.path) || a.target.endLine - b.target.endLine);
+  return out.sort((a, b) => treeCompare(a.target.path, b.target.path) || a.target.endLine - b.target.endLine);
 }
 
 export function discardUnsent(storageKey: string): void {

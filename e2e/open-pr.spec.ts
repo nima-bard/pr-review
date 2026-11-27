@@ -327,6 +327,9 @@ test('asking Claude about a line: the line gets a marker, the answer is in the s
   // Removing the marker takes it off the line, and is saved, so a refresh doesn't bring it back.
   await win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: /^Comments/ }).click();
   await expect(comments).toBeVisible();
+  // The panel's card says why its border is yellow: the comment's new line is a best guess.
+  await expect(comments.getByText('Best guess', { exact: true })).toBeVisible();
+  await expect(comments.locator('[title^="Outdated: written on an older version"]')).toBeVisible();
   await win.getByRole('button', { name: 'Hide this marker' }).click();
   await expect(win.getByText('Asked Claude:')).toHaveCount(0);
   // Kept beside the worktree (its git folder), not as a copy of the conversation.
@@ -579,6 +582,16 @@ test('with a file open in its own tab, the Claude box asks about that file', asy
   await expect(fileChip).toBeVisible();
   await win.getByRole('button', { name: 'Close src/calc.ts' }).click();
   await expect(fileChip).toHaveCount(0);
+});
+
+test('Settings › General lists the repositories found, each with its clone', async () => {
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu', 'settings'));
+  const found = win.getByRole('region', { name: 'Repositories found' });
+  await expect(found).toContainText('Found 1 repository', { timeout: 10_000 });
+  await expect(found).toContainText('acme/demo');
+  await expect(found).toContainText(join(fx.root, 'source', 'demo'));
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu', 'close-tab'));
+  await expect(found).toHaveCount(0);
 });
 
 test('a window reopened from the Dock shows the pull request that was open', async () => {

@@ -6,6 +6,7 @@ import { Segmented } from '../../components/ui';
 import { ThreadCard } from '../../diff/ThreadCard';
 import { updateUi, usePrUi, type PrUi } from '../../state/ui';
 import { threadGroup } from './ReviewThreads';
+import { treeCompare } from './treeOrder';
 
 type Filter = PrUi['filter'];
 
@@ -36,7 +37,7 @@ export function ConversationsPanel({ snapshot }: { snapshot: PrSnapshot }) {
       inScope
         .filter((t) => filter.match(t, snapshot))
         .sort((a, b) => {
-          if (a.anchor.path !== b.anchor.path) return a.anchor.path === currentPath ? -1 : b.anchor.path === currentPath ? 1 : a.anchor.path.localeCompare(b.anchor.path);
+          if (a.anchor.path !== b.anchor.path) return a.anchor.path === currentPath ? -1 : b.anchor.path === currentPath ? 1 : treeCompare(a.anchor.path, b.anchor.path);
           return (a.anchor.line ?? 0) - (b.anchor.line ?? 0);
         }),
     [inScope, filter, snapshot, currentPath],

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Settings › General lists the repositories found**, each with the clone its pull requests are checked out from, so a folder picked one level off shows at a glance. "Folders with your clones" also takes a clone itself (the folder holding it was meant, but the clone now just works), and `~/` in it and in "Worktree folder" means your home folder. The worktree folder's placeholder reads as a hint, and its explanation shows where one of your own clones' pull requests would go.
+
+### Fixes
+
+- With a worktree folder set, pull requests with the same number from two repositories both went to `<folder>/wt-pr-123`, and the second couldn't be checked out. They now go to `<folder>/<owner>/<repo>/pr-123`; one already in `wt-pr-123` keeps being used.
+- With a repository's clone set to a folder inside it (picked by hand, or found that way when "Folders with your clones" listed the clone itself), the file list was right but every file showed "No textual changes", because git read the files' paths from that folder. The app now always uses the clone's top folder, and corrects a setting saved that way when you next open one of its pull requests.
+
+- All changes listed the files by their full path as text, so a file in a folder could come before that folder's subfolders (code/deploy.sh before code/Api/…), unlike the file tree. The diffs, j and k, n and p, and the Comments panel now follow the tree's order: at each level folders first, then files.
+- In the Comments panel, an outdated comment the app had to place by a best guess had a yellow border with nothing saying why. Its header now says so too (“Best guess”, “≈ 85%”, “AI-matched”), with what it means and how to check it in the tooltip, as the card in the diff does.
+
 ## 0.3.0
 
 Ask Claude and the MCP server were built by @nima-bard ([their branch](https://github.com/nima-bard/pr-review/tree/feature/agents)). Thank you!

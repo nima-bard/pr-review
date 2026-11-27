@@ -6,6 +6,12 @@ describe('treeCompare', () => {
     const paths = ['src/z.ts', 'README.md', 'src/lib/a.ts', 'src/a.ts', 'docs/x.md'];
     expect([...paths].sort(treeCompare)).toEqual(['docs/x.md', 'src/lib/a.ts', 'src/a.ts', 'src/z.ts', 'README.md']);
   });
+
+  it('puts a file after its folder’s subfolders even when its name sorts first, as the tree shows it', () => {
+    // As plain text "code/deploy…" comes first ("dep" < "Doc"); the tree lists the DocumentRecognitionService folder first.
+    const paths = ['code/deploy_dev_svc.sh', 'code/DocumentRecognitionService/api/document-recognition-service-v1.x.x.yaml', 'code/Api/Wiring.fs'];
+    expect([...paths].sort(treeCompare)).toEqual(['code/Api/Wiring.fs', 'code/DocumentRecognitionService/api/document-recognition-service-v1.x.x.yaml', 'code/deploy_dev_svc.sh']);
+  });
 });
 
 describe('closestInTree', () => {

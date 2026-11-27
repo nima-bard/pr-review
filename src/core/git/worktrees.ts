@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { RemovalBlocker } from '../../shared/model';
+import { expandHome } from '../paths';
 import { gh, git } from './exec';
 
 /** Resolves symlinks (macOS /var -> /private/var) for the longest existing prefix of `p`. */
@@ -57,10 +58,23 @@ export async function listWorktrees(repo: string): Promise<Worktree[]> {
   return parseWorktreeList(await git(repo, ['worktree', 'list', '--porcelain', '-z']));
 }
 
-export function ownedWorktreePath(clonePath: string, prNumber: number, root?: string | null): string {
+/**
+ * Where the app checks a pull request out: next to its clone (`<clone>.worktrees/pr-123`), or with a worktree folder
+ * set, `<folder>/<owner>/<repo>/pr-123`, so the same number in two repositories gets two folders (lowercase: GitHub
+ * names ignore case, and links don't always agree on it).
+ */
+export function ownedWorktreePath(clonePath: string, pr: { owner: string; repo: string; number: number }, root?: string | null): string {
   return root
-    ? join(root, `wt-pr-${prNumber}`)
-    : join(dirname(clonePath), `${basename(clonePath)}.worktrees`, `pr-${prNumber}`);
+    ? join(expandHome(root), pr.owner.toLowerCase(), pr.repo.toLowerCase(), `pr-${pr.number}`)
+    : join(dirname(clonePath), `${basename(clonePath)}.worktrees`, `pr-${pr.number}`);
+}
+
+/**
+ * Where earlier versions put it in a worktree folder: `<folder>/wt-pr-123`, for every repository alike. A worktree there
+ * that belongs to this pull request's clone is still the app's own (another repository's never shows in its list).
+ */
+export function legacyWorktreePath(prNumber: number, root?: string | null): string | null {
+  return root ? join(expandHome(root), `wt-pr-${prNumber}`) : null;
 }
 
 export type WorktreePlan =
@@ -76,18 +90,21 @@ export function samePath(a: string, b: string): boolean {
 export function planWorktree(input: {
   worktrees: readonly Worktree[];
   ownedPath: string;
+  /** Where an earlier version put the app's own worktree for this pull request (still its own if it's there). */
+  legacyPath?: string | null;
   headRefName: string;
   headOid: string;
   role: 'author' | 'reviewer';
 }): WorktreePlan {
   const live = input.worktrees.filter((w) => w.prunable === null && !w.bare);
+  const ours = (path: string) => samePath(path, input.ownedPath) || (!!input.legacyPath && samePath(path, input.legacyPath));
   const onBranch = live.find((w) => w.branch === input.headRefName);
   if (input.role === 'author') {
     return onBranch
-      ? { kind: 'reuse', path: onBranch.path, mode: 'branch', mayMove: false, owned: samePath(onBranch.path, input.ownedPath) }
+      ? { kind: 'reuse', path: onBranch.path, mode: 'branch', mayMove: false, owned: ours(onBranch.path) }
       : { kind: 'create-branch', path: input.ownedPath };
   }
-  const owned = live.find((w) => samePath(w.path, input.ownedPath));
+  const owned = live.find((w) => samePath(w.path, input.ownedPath)) ?? live.find((w) => ours(w.path));
   if (owned) {
     return {
       kind: 'reuse',

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { rmSync, writeFileSync } from 'node:fs';
-import { listWorktrees, ownedWorktreePath, parseWorktreeList, planWorktree, removalBlocker, removeWorktree, type Worktree } from '../../../src/core/git/worktrees';
+import { legacyWorktreePath, listWorktrees, ownedWorktreePath, parseWorktreeList, planWorktree, removalBlocker, removeWorktree, type Worktree } from '../../../src/core/git/worktrees';
 import { tempRepo } from '../../helpers/gitRepo';
 
 const wt = (p: Partial<Worktree> & { path: string }): Worktree => ({
@@ -73,12 +73,35 @@ describe('planWorktree', () => {
     const plan = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: owned.toUpperCase(), detached: true })] });
     expect(plan.kind).toBe('reuse');
   });
+
+  it('still takes a worktree where an earlier version put it as its own, for both roles', () => {
+    const legacyPath = '/wt/wt-pr-7';
+    const reviewer = planWorktree({ ...base, legacyPath, role: 'reviewer', worktrees: [wt({ path: legacyPath, detached: true, head: 'old' })] });
+    expect(reviewer).toMatchObject({ kind: 'reuse', path: legacyPath, owned: true, mayMove: true });
+    const author = planWorktree({ ...base, legacyPath, role: 'author', worktrees: [wt({ path: legacyPath, branch: 'feature/x' })] });
+    expect(author).toMatchObject({ kind: 'reuse', path: legacyPath, owned: true });
+    // Without one, a new worktree goes to the new place.
+    expect(planWorktree({ ...base, legacyPath, role: 'reviewer', worktrees: [] })).toEqual({ kind: 'create-detached', path: owned });
+  });
 });
 
 describe('ownedWorktreePath', () => {
-  it('defaults to a sibling <repo>.worktrees folder and honours a custom root', () => {
-    expect(ownedWorktreePath('/Users/me/source/app', 12)).toBe('/Users/me/source/app.worktrees/pr-12');
-    expect(ownedWorktreePath('/Users/me/source/app', 12, '/Users/me/source')).toBe('/Users/me/source/wt-pr-12');
+  const pr = { owner: 'acme', repo: 'app', number: 12 };
+
+  it('defaults to a sibling <repo>.worktrees folder', () => {
+    expect(ownedWorktreePath('/Users/me/source/app', pr)).toBe('/Users/me/source/app.worktrees/pr-12');
+  });
+
+  it('with a worktree folder, gives each repository its own place, so the same number in two can’t clash', () => {
+    expect(ownedWorktreePath('/Users/me/source/app', pr, '/Users/me/wt')).toBe('/Users/me/wt/acme/app/pr-12');
+    expect(ownedWorktreePath('/Users/me/source/web', { owner: 'acme', repo: 'web', number: 12 }, '/Users/me/wt')).toBe('/Users/me/wt/acme/web/pr-12');
+    // GitHub names ignore case, so a link in other case is the same place.
+    expect(ownedWorktreePath('/x', { owner: 'Acme', repo: 'App', number: 12 }, '/Users/me/wt')).toBe('/Users/me/wt/acme/app/pr-12');
+  });
+
+  it('knows where earlier versions put it in a worktree folder', () => {
+    expect(legacyWorktreePath(12, '/Users/me/wt')).toBe('/Users/me/wt/wt-pr-12');
+    expect(legacyWorktreePath(12, null)).toBeNull();
   });
 });
 

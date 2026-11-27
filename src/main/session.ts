@@ -80,6 +80,7 @@ import {
   fetchPullHead,
   listWorktrees,
   moveOwnedDetached,
+  legacyWorktreePath,
   ownedWorktreePath,
   planWorktree,
 } from '../core/git/worktrees';
@@ -487,10 +488,12 @@ export class PrSession {
   private async prepareWorktree(details: PrDetails, role: Role): Promise<WorktreeState> {
     const { clonePath, appState } = this.deps;
     const settings = await appState.settings();
-    const ownedPath = canonicalPath(ownedWorktreePath(clonePath, this.ref.number, settings.worktreeRoot));
+    const ownedPath = canonicalPath(ownedWorktreePath(clonePath, this.ref, settings.worktreeRoot));
+    const legacy = legacyWorktreePath(this.ref.number, settings.worktreeRoot);
     const plan = planWorktree({
       worktrees: await listWorktrees(clonePath),
       ownedPath,
+      legacyPath: legacy ? canonicalPath(legacy) : null,
       headRefName: details.headRefName,
       headOid: details.headRefOid,
       role,

@@ -13,7 +13,7 @@ import { inbox, searchPrs } from '../core/github/search';
 import { filterSuggestions } from '../core/github/suggestions';
 import { canonicalPath, listWorktrees, removalBlocker, removeWorktree, samePath } from '../core/git/worktrees';
 import { closedPrsFor, type ClosedPr, type PrLookup } from '../core/github/closedPrs';
-import { mergeMappings, remotesOf, scanRoots } from '../core/repos/registry';
+import { mergeMappings, remotesOf, repoTopLevel, scanRoots } from '../core/repos/registry';
 import { AppState } from '../core/store/appState';
 import { DraftStore } from '../core/store/drafts';
 import { openInEditor } from './editor';
@@ -333,7 +333,14 @@ export class SessionRegistry implements ReviewBridge {
     const slug = repoSlug(ref);
     let mapping = (await this.appState.repos()).find((m) => m.slug === slug);
     if (!mapping) mapping = (await this.repoMappings(true)).find((m) => m.slug === slug);
-    return mapping?.path ?? null;
+    if (!mapping) return null;
+    // A folder inside the clone (picked by hand before that was checked) is corrected to the clone's top, and saved.
+    const top = await repoTopLevel(mapping.path);
+    if (top !== mapping.path) {
+      const fixed = { ...mapping, path: top };
+      await this.appState.saveRepos((await this.appState.repos()).map((m) => (m.slug === slug ? fixed : m)));
+    }
+    return top;
   }
 
   /**
@@ -578,8 +585,10 @@ export class SessionRegistry implements ReviewBridge {
       listRepos: () => this.repoMappings(),
       rescanRepos: () => this.repoMappings(true),
       mapRepo: async (slug) => {
-        const dir = await this.host.pickFolder(`Select your local clone of ${slug}`);
-        if (!dir) return null;
+        const picked = await this.host.pickFolder(`Select your local clone of ${slug}`);
+        if (!picked) return null;
+        // Any folder inside the clone has its remotes; the clone itself is its top folder.
+        const dir = await repoTopLevel(picked);
         const remotes = await remotesOf(dir);
         if (!remotes.some((r) => `${r.info.owner}/${r.info.repo}`.toLowerCase() === slug.toLowerCase())) {
           throw new Error(`${dir} has no remote pointing at ${slug}.`);

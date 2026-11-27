@@ -27,6 +27,20 @@ export function tierLabel(anchor: TrackedAnchor, originalLine: number | null): s
   }
 }
 
+/**
+ * For a comment whose new line isn't certain (a `warn` tier): a short label for a tight header ("≈ 85%", "Best guess",
+ * "AI-matched"), and what it means, for its tooltip. Null for the other tiers.
+ */
+export function uncertainPlacement(anchor: TrackedAnchor): { short: string; explanation: string } | null {
+  if (tierTone(anchor) !== 'warn') return null;
+  const pct = anchor.score !== undefined ? `≈ ${Math.round(anchor.score * 100)}%` : null;
+  const check = 'Check it’s the right one: Compare then ↔ now, in the diff, shows the line it was written on and this one.';
+  const older = 'Outdated: written on an older version of the code.';
+  if (anchor.tier === 'fuzzy') return { short: pct ?? 'Re-anchored', explanation: `${older} PR Review put it on this line because the code here is like the line it was written on${pct ? ` (${pct} alike)` : ''}. ${check}` };
+  if (anchor.tier === 'ai') return { short: 'AI-matched', explanation: `${older} Claude matched it to this line${pct ? ` (${pct} sure)` : ''}. ${check}` };
+  return { short: 'Best guess', explanation: `${older} PR Review couldn’t find that line again; this is its best guess${pct ? ` (${pct} alike)` : ''}. ${check}` };
+}
+
 export function tierTone(anchor: TrackedAnchor): 'ok' | 'warn' | 'muted' {
   if (anchor.tier === 'exact' || anchor.tier === 'shifted' || anchor.tier === 'manual') return 'ok';
   if (anchor.tier === 'orphan') return 'muted';

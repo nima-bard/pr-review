@@ -25,6 +25,7 @@ import { useTextSelectionContext } from '../../diff/useTextSelectionContext';
 import { ActivityBar, ActivityCount, type Activity } from './ActivityBar';
 import { ClaudeSpinner, SidePanel, toggleSidePanel, useClaudeWorking, useSidePanelShows } from './SidePanel';
 import { useClaudeSettings } from '../../state/claude';
+import { treeCompare } from './treeOrder';
 
 async function showTabMenu(snapshot: PrSnapshot, id: string): Promise<void> {
   const key = snapshot.key;
@@ -122,7 +123,7 @@ function StrayComments({ snapshot }: { snapshot: PrSnapshot }) {
       if (hideResolved && t.isResolved && t.id !== ui.focusThread) continue;
       map.set(t.anchor.path, [...(map.get(t.anchor.path) ?? []), t]);
     }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return [...map.entries()].sort(([a], [b]) => treeCompare(a, b));
   }, [snapshot, hideResolved, ui.focusThread]);
   if (byPath.length === 0) return null;
   const count = byPath.reduce((n, [, list]) => n + list.length, 0);
@@ -153,7 +154,8 @@ function StrayComments({ snapshot }: { snapshot: PrSnapshot }) {
 function AllChanges({ snapshot }: { snapshot: PrSnapshot }) {
   const ui = usePrUi(snapshot.key);
   const prefs = usePrefs();
-  const sorted = useMemo(() => [...snapshot.files].sort((a, b) => a.path.localeCompare(b.path)), [snapshot.files]);
+  // In the file tree's order (at each level folders first, then files), so the diffs follow the tree.
+  const sorted = useMemo(() => [...snapshot.files].sort((a, b) => treeCompare(a.path, b.path)), [snapshot.files]);
   const commented = useMemo(() => (prefs.onlyCommented ? commentedPaths(snapshot, prefs.hideResolved) : null), [snapshot, prefs.onlyCommented, prefs.hideResolved]);
   const afterViewed = prefs.hideViewed ? sorted.filter((f) => f.viewed !== 'VIEWED' || f.path === ui.focusPath) : sorted;
   const hiddenViewed = sorted.length - afterViewed.length;

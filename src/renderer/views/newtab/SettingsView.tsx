@@ -1,6 +1,6 @@
 import { MultiFileDiff } from '@pierre/diffs/react';
 import { useEffect, useRef, useState } from 'react';
-import type { AuthStatus, BrowserExtensionInfo, Settings } from '../../../shared/model';
+import type { AuthStatus, BrowserExtensionInfo, RepoMapping, Settings } from '../../../shared/model';
 import iconLicense from 'material-icon-theme/LICENSE?raw';
 import octiconsLicense from '../../components/octicons.LICENSE.txt?raw';
 import hydraLicense from '../../diff/hydra/LICENSE.txt?raw';
@@ -373,6 +373,8 @@ function AboutVersion() {
 /** Saves changes to some settings a moment after the last one, over the latest saved settings (each page saves its own). */
 function useSettingsSaver() {
   const [s, setS] = useState<Settings | null>(null);
+  // The clones found by the last scan, after the folders to look in changed.
+  const [found, setFound] = useState<RepoMapping[] | null>(null);
   const setStatus = setSettingsStatus;
   const pending = useRef<Partial<Settings>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -390,7 +392,7 @@ function useSettingsSaver() {
       const current = await api.getSettings();
       await api.saveSettings({ ...current, ...patch });
       // New folders to scan: find the clones in them now.
-      if (patch.scanRoots) await api.rescanRepos();
+      if (patch.scanRoots) setFound(await api.rescanRepos());
       setStatus('Saved');
     } catch (err) {
       setStatus(errorText(err));
@@ -415,16 +417,73 @@ function useSettingsSaver() {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void flush.current(), wait);
   };
-  return { s, set };
+  return { s, set, found };
+}
+
+/** A path as you'd write it: your home folder as ~. */
+const tilde = (p: string) => p.replace(/^\/Users\/[^/]+/, '~');
+const lastPart = (p: string) => p.replace(/\/+$/, '').split('/').at(-1) ?? p;
+/** A folder short enough for a tree's line: ~ for home, and only its last two folders when it's still long. */
+const shortPath = (p: string) => {
+  const t = tilde(p).replace(/\/+$/, '');
+  return t.length <= 36 ? t : `…/${t.split('/').slice(-2).join('/')}`;
+};
+const parentOf = (p: string) => p.replace(/\/+$/, '').replace(/\/[^/]+$/, '') || '/';
+
+/** One line of example under a setting: where from, and where to (cut from the left when long). */
+function Example({ from, to }: { from: string; to: string }) {
+  return (
+    <div aria-hidden="true" className="-mt-2 flex items-baseline gap-2 min-w-0 font-mono text-[12px] text-soft">
+      <span className="flex-none">{from}</span>
+      <span className="text-muted flex-none">→</span>
+      <span className="truncate min-w-0" style={{ direction: 'rtl', textAlign: 'left' }}>
+        <bdi>{to}</bdi>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The repositories the folders above gave, each with its clone: where a pull request of it is checked out from. Shows
+ * a folder picked one level off (the clone where the folder holding it was meant, or the other way round) at a glance.
+ */
+function FoundRepos({ repos }: { repos: RepoMapping[] | null }) {
+  if (!repos) return null;
+  return (
+    <section aria-label="Repositories found" className="-mt-2 flex flex-col gap-1">
+      <span className="text-[12px] text-muted">{repos.length === 0 ? 'No clones found in these folders.' : `Found ${repos.length} repositor${repos.length === 1 ? 'y' : 'ies'}:`}</span>
+      {repos.map((r) => (
+        <div key={r.slug} className="flex items-baseline gap-2 min-w-0 text-[12px]">
+          <span className="font-mono text-strong flex-none">{r.slug}</span>
+          <span className="text-muted flex-none">→</span>
+          {/* The end of the path matters most: cut from the left. */}
+          <span className="font-mono text-soft truncate min-w-0" style={{ direction: 'rtl' }}>
+            <bdi>{r.path}</bdi>
+          </span>
+          {r.source === 'manual' && <span className="text-muted flex-none">chosen by you</span>}
+        </div>
+      ))}
+    </section>
+  );
 }
 
 function GeneralPage() {
-  const { s, set } = useSettingsSaver();
+  const { s, set, found } = useSettingsSaver();
   const [roots, setRoots] = useState<string | null>(null);
+  const [repos, setRepos] = useState<RepoMapping[] | null>(null);
+  useEffect(() => {
+    void api.listRepos().then(setRepos, () => setRepos([]));
+  }, []);
   if (!s) return <Spinner label="Loading settings…" />;
+  const shown = found ?? repos;
+  // The examples use your own folders: the first one listed, and a clone found in it (or any clone).
+  const root = s.scanRoots[0] ? shortPath(s.scanRoots[0]) : '~/source';
+  const example = (shown ?? []).find((r) => s.scanRoots[0] && tilde(parentOf(r.path)) === tilde(s.scanRoots[0]).replace(/\/+$/, '')) ?? shown?.[0];
+  const clone = example?.path;
+  const slug = example?.slug;
   return (
     <>
-      <Field label="Folders with your clones" hint="One per line. Each folder’s direct subfolders are checked for git clones, and their remotes tell which repository each one is.">
+      <Field label="Folders with your clones" hint="One per line: a folder that holds your clones, or a clone itself. Each clone’s remotes tell which repository it is.">
         <textarea
           rows={3}
           value={roots ?? s.scanRoots.join('\n')}
@@ -432,12 +491,19 @@ function GeneralPage() {
             setRoots(e.target.value);
             set({ scanRoots: e.target.value.split('\n').map((r) => r.trim()).filter(Boolean) }, 900);
           }}
-          className="px-3 py-2 rounded-lg bg-card border border-line-2 focus:border-accent outline-none font-mono text-[12.5px]"
+          placeholder="~/source"
+          className="px-3 py-2 rounded-lg bg-card border border-line-2 focus:border-accent outline-none font-mono text-[12.5px] placeholder:font-sans"
         />
       </Field>
-      <Field label="Worktree folder" hint="Where pull requests are checked out. Empty: next to the clone, e.g. ~/source/my-app.worktrees/pr-123. A folder: <folder>/wt-pr-123.">
-        <input value={s.worktreeRoot ?? ''} onChange={(e) => set({ worktreeRoot: e.target.value.trim() || null })} placeholder="(next to the clone)" className={INPUT} />
+      <Example from={`${root}/`} to={`${root}/${clone ? lastPart(clone) : 'my-app'}`} />
+      <FoundRepos repos={shown} />
+      <Field label="Worktree folder" hint="Where pull requests are checked out.">
+        <input value={s.worktreeRoot ?? ''} onChange={(e) => set({ worktreeRoot: e.target.value.trim() || null })} placeholder="Empty: next to each clone" className={`${INPUT} placeholder:font-sans`} />
       </Field>
+      <Example
+        from={clone ? shortPath(clone) : '~/source/my-app'}
+        to={s.worktreeRoot ? `${shortPath(s.worktreeRoot)}/${slug ?? 'owner/my-app'}/pr-123` : `${clone ? shortPath(clone) : '~/source/my-app'}.worktrees/pr-123`}
+      />
       <Field label="Editor command" hint="For “Open in Editor”; called as <command> -g file:line (code, cursor, windsurf…).">
         <input value={s.editorCommand} onChange={(e) => set({ editorCommand: e.target.value })} className={INPUT} />
       </Field>

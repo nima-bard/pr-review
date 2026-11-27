@@ -228,7 +228,7 @@ export function SetupWizard() {
                     <span>
                       In one folder{settings.worktreeRoot ? ': ' : ''}
                       {settings.worktreeRoot && <span className="font-mono text-[12.5px]">{settings.worktreeRoot.replace(info.home, '~')}</span>}
-                      <span className="block text-[12px] text-muted font-mono">&lt;folder&gt;/wt-pr-123</span>
+                      <span className="block text-[12px] text-muted font-mono">&lt;folder&gt;/&lt;owner&gt;/&lt;repo&gt;/pr-123</span>
                     </span>
                   </label>
                 </fieldset>

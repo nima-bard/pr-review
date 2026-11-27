@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CommentView, PrSnapshot, ThreadView } from '../../shared/model';
 import type { ContextMenuItem } from '../../shared/ipc';
-import { tierLabel, tierTone } from '../../shared/labels';
+import { tierLabel, tierTone, uncertainPlacement } from '../../shared/labels';
 import { isClaudeGenerated } from '../../shared/triage';
 import { markdownPreview } from '../../shared/markdownPreview';
 import { parseHunkSide } from '../../core/anchor/fuzzy';
@@ -237,6 +237,8 @@ export function ThreadCard({
   const first = thread.comments[0];
   const tone = tierTone(thread.anchor);
   const showTier = thread.isOutdated && !thread.fileLevel;
+  // An outdated comment whose new line isn't certain: a yellow border, and in the panel a badge saying why.
+  const uncertain = showTier && !thread.isResolved ? uncertainPlacement(thread.anchor) : null;
   const hasSuggestion = thread.comments.some((c) => /```suggestion/.test(c.body));
   const author = snapshot.role === 'author';
 
@@ -311,7 +313,7 @@ export function ThreadCard({
       className={cx(
         'rounded-[9px] bg-raised border overflow-hidden font-sans text-comment',
         !wide && !panel && 'max-w-[680px]',
-        selected ? 'border-accent' : tone === 'warn' && showTier && !thread.isResolved ? 'border-warn-line' : 'border-line-2',
+        selected ? 'border-accent' : uncertain ? 'border-warn-line' : 'border-line-2',
       )}
     >
       {panel ? (
@@ -329,6 +331,12 @@ export function ThreadCard({
             </span>
             <span className="text-link text-[12px] whitespace-nowrap flex-none">{threadLocation(thread)}</span>
           </button>
+          {/* Why the card has a yellow border: its new line is a guess (the diff's card says so in its Outdated badge). */}
+          {uncertain && (
+            <span title={uncertain.explanation} className="flex-none">
+              <Badge tone="warn">{uncertain.short}</Badge>
+            </span>
+          )}
           <IconButton label={`Go to ${thread.anchor.path}${thread.anchor.line !== undefined ? `:${thread.anchor.line}` : ''}`} onClick={() => focusFile(key, thread.anchor.path, thread.id)}>
             <Icon name="external" size={13} />
           </IconButton>

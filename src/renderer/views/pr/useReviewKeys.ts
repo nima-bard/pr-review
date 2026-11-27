@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import type { PrSnapshot } from '../../../shared/model';
 import { closeFind, focusFile, getPrUi, requestComposer, updateUi } from '../../state/ui';
+import { treeCompare } from './treeOrder';
 
 function typing(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -11,7 +12,7 @@ function typing(target: EventTarget | null): boolean {
 export function useReviewKeys(snapshot: PrSnapshot, active: boolean, onHelp: () => void): void {
   useEffect(() => {
     if (!active) return;
-    const files = [...snapshot.files].sort((a, b) => a.path.localeCompare(b.path)).map((f) => f.path);
+    const files = [...snapshot.files].sort((a, b) => treeCompare(a.path, b.path)).map((f) => f.path);
     const order = new Map(files.map((p, i) => [p, i]));
     const threads = snapshot.threads
       .filter((t) => !t.isResolved)
