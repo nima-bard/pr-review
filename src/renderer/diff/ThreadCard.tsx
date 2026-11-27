@@ -433,7 +433,7 @@ export function ThreadCard({
           ))}
           {thread.viewerCanReply && (
             // @container: the hint by the reply buttons goes when the card is too narrow for it and them on one row.
-            <div className={cx('@container flex flex-col gap-2 px-3 pt-2.5 pb-3', thread.comments.length > 1 && 'bg-inset')}>
+            <div className={cx('@container relative flex flex-col gap-2 px-3 pt-2.5 pb-3', thread.comments.length > 1 && 'bg-inset')}>
               <label className="sr-only" htmlFor={`reply-${variant}-${thread.id}`}>
                 Reply
               </label>

@@ -338,7 +338,9 @@ function Content({ snapshot, active }: { snapshot: PrSnapshot; active: boolean }
       <ContentTabs snapshot={snapshot} />
       <div className="relative flex-1 min-h-0">
         <FindBar snapshot={snapshot} count={found.count} current={found.current} allChanges={tab.kind === 'changes'} />
-        <div ref={scroller} className="h-full overflow-y-auto">
+        {/* Positioned, so what's absolutely placed in the diffs (a screen reader's hidden label, say) is placed and clipped
+            in here, not in the frame around it, where it would make the whole column scroll. */}
+        <div ref={scroller} className="relative h-full overflow-y-auto">
           {tab.kind === 'changes' && <AllChanges snapshot={snapshot} />}
           {tab.kind === 'file' && changed && (
             <div className="p-4">
@@ -567,7 +569,9 @@ export function FilesView({ pr, snapshot, active = true }: { pr: PrPreview; snap
                 <Separator className={SEPARATOR} />
               </>
             )}
-            <Panel id="content" minSize={420}>
+            {/* Everything in it scrolls by itself (the diffs, the Overview, the commits), so the panel itself never does:
+                otherwise one stray pixel below makes a second scrollbar, and going to a line scrolls the whole column. */}
+            <Panel id="content" minSize={420} style={{ overflow: 'clip' }}>
               {overview && <Overview pr={pr} snapshot={snapshot} />}
               {commits && (snapshot ? <CommitsView snapshot={snapshot} /> : <ContentSkeleton prKey={key} what="The commits" />)}
               {!snapshot && !covered && <ContentSkeleton prKey={key} what="The files" />}

@@ -22,7 +22,7 @@ export function CommentEditor({ prKey, kind, commentId, body, onDone }: { prKey:
     }
   };
   return (
-    <div className="flex flex-col gap-2 mt-1.5">
+    <div className="relative flex flex-col gap-2 mt-1.5">
       <label className="sr-only" htmlFor={`edit-${commentId}`}>
         Comment text
       </label>

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A file’s header in the diffs stays on one line.** A long path no longer wraps: its folders give way from the left (“…CommandHandling/Properties/launchSettings.json”), so the file name and the folders nearest it stay in view, and the full path is in the tooltip.
+
+### Fixes
+
+- A file with one review thread said “1 threads” in its header.
+- The middle column could get a second scrollbar beside the diffs’ own, depending on where review threads sat and how big the window was, and going to a line or a file (j, k, n, p) then scrolled the whole column, tab bar and all. The hidden labels of the reply boxes were placed outside the diffs’ scrolling area; they now stay inside it, and the column itself never scrolls ([#3](https://github.com/stefan-schweiger/pr-review/issues/3)).
+
 ## 0.3.1
 
 - **Settings › General lists the repositories found**, each with the clone its pull requests are checked out from, so a folder picked one level off shows at a glance. "Folders with your clones" also takes a clone itself (the folder holding it was meant, but the clone now just works), and `~/` in it and in "Worktree folder" means your home folder. The worktree folder's placeholder reads as a hint, and its explanation shows where one of your own clones' pull requests would go.

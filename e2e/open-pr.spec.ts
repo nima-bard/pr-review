@@ -251,6 +251,21 @@ test('opens a PR into a worktree, re-anchors an outdated thread and submits a re
   await expect(card).toContainText('Line 6');
   await expect(card).toContainText(/Outdated · (Re-anchored|Best guess)/);
   await expect(card).toContainText('Can items be negative here?');
+  // Nothing in the diffs is placed against something outside their scrolling area: it would stick out below and make
+  // the whole middle column scroll (issue #3, a reply box's hidden label).
+  type Box = { parentElement: Box | null; offsetParent?: Box | null; outerHTML: string; contains(other: Box): boolean; querySelectorAll(selector: string): ArrayLike<Box> };
+  const escaped = await card.evaluate((node) => {
+    const el = node as unknown as Box;
+    const page = globalThis as unknown as { getComputedStyle(e: Box): { overflowY: string; position: string } };
+    let scroller = el.parentElement;
+    while (scroller && page.getComputedStyle(scroller).overflowY !== 'auto') scroller = scroller.parentElement;
+    if (!scroller) return ['no scroller'];
+    const within = scroller;
+    return Array.from(within.querySelectorAll('*'))
+      .filter((e) => page.getComputedStyle(e).position === 'absolute' && e.offsetParent && !within.contains(e.offsetParent))
+      .map((e) => e.outerHTML.slice(0, 80));
+  });
+  expect(escaped).toEqual([]);
 
   await win.evaluate(() =>
     (globalThis as unknown as { api: Api }).api.saveDraft('github.com/acme/demo#1', {

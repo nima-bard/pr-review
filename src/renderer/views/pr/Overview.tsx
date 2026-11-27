@@ -285,7 +285,7 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
                 </div>
               ),
             )}
-            <div className="flex flex-col gap-2">
+            <div className="relative flex flex-col gap-2">
               <label htmlFor="pr-comment" className="sr-only">
                 Comment on the pull request
               </label>

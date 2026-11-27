@@ -295,6 +295,7 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
   const toggleCollapsed = () => updateUi(key, (u) => ({ collapsed: { ...u.collapsed, [file.path]: !collapsed } }));
   const dir = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : '';
   const name = file.path.slice(dir.length);
+  const renamed = !!file.oldPath && file.oldPath !== file.path;
   // Like github.com, a deleted file's old contents load on request, unless comments or drafts sit on it.
   const [loadDeleted, setLoadDeleted] = useState(false);
   const hasComments = threadCount > 0 || snapshot.drafts.some((d) => d.path === file.path);
@@ -303,7 +304,7 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
   return (
     <section ref={ref} id={`file-${file.path}`} aria-label={file.path} className="border border-line-2 rounded-[9px] bg-panel overflow-clip">
       {/* Square on purpose: the section's clip rounds it at rest; rounded corners of its own let scrolled code show through while it's pinned. */}
-      <div className={cx('sticky top-0 z-10 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-2 bg-subtle', !collapsed && 'border-b border-line-2')}>
+      <div className={cx('sticky top-0 z-10 flex items-center gap-x-2.5 px-3 py-2 bg-subtle whitespace-nowrap', !collapsed && 'border-b border-line-2')}>
         <button type="button" aria-label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`} onClick={toggleCollapsed} className="grid place-items-center w-[22px] h-[22px] rounded text-muted hover:text-fg cursor-pointer">
           <Icon name="chevron" size={13} rotate={collapsed ? -90 : 0} />
         </button>
@@ -311,15 +312,23 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
           {changeLetter(file.change)}
         </span>
         <FileIcon path={file.path} />
-        {/* ⌘-click the name: the whole file in its own tab. */}
+        {/* ⌘-click the path: the whole file in its own tab. Short of room, the folders give way from the left, so the file
+            name and the folders nearest it stay in view; the name itself is cut only when nothing else is left. */}
         <span
-          className="font-mono text-[12.5px] text-muted min-w-0 truncate"
+          className="flex min-w-0 font-mono text-[12.5px] text-muted"
           title={`${file.path} (⌘-click to open in a tab)`}
           onClick={(e) => e.metaKey && openFileTab(key, file.path, true, false)}
         >
-          {file.oldPath && file.oldPath !== file.path && <span className="text-faint">{file.oldPath} → </span>}
-          {dir}
-          <strong className="text-strong font-semibold">{name}</strong>
+          {(renamed || dir) && (
+            // Right to left, so the ellipsis takes the start; the path inside still reads left to right.
+            <span dir="rtl" className="min-w-0 truncate">
+              <bdi dir="ltr">
+                {renamed && <span className="text-faint">{file.oldPath} → </span>}
+                {dir}
+              </bdi>
+            </span>
+          )}
+          <strong className="shrink-0 max-w-full truncate text-strong font-semibold">{name}</strong>
         </span>
         <span className="font-mono text-[11.5px]">
           <span className="text-add">+{file.additions}</span> <span className="text-del">−{file.deletions}</span>
@@ -327,7 +336,7 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
         {file.generated && <Badge>Generated</Badge>}
         {file.viewed === 'DISMISSED' && <Badge tone="warn">Changed since viewed</Badge>}
         <span className="flex-1" />
-        {threadCount > 0 && <span className="text-muted text-[12px]">{threadCount} threads</span>}
+        {threadCount > 0 && <span className="text-muted text-[12px]">{threadCount === 1 ? '1 thread' : `${threadCount} threads`}</span>}
         <button
           type="button"
           aria-label={`Actions for ${file.path}`}
