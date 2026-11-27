@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - **Review or contribute**, switched in the middle of the header (where Overview · Files · Commits used to be). Review uses PR Review’s own worktree, detached at the latest push and updated with every push; Claude can read the code and suggests changes as review comments. Contribute checks out the pull request’s branch (in your own worktree, if it’s already checked out there): you edit files in your editor or ask Claude (which commits and pushes only when you ask it to), and a bar below the title shows the branch, uncommitted files, unpushed commits and new commits on GitHub, with **Local changes**, **Discard**, **Commit…** (and push) and **Pull**/**Push**. Pushing is never forced, and only offered when you can push to the branch. Your own pull requests start in Contribute, others in Review, and PR Review remembers what you chose. Switching explains first what changes; “Don’t explain this again” turns that off (Settings › General turns it back on). It all works without Claude: edits you make in your editor show as they happen.
 - **Local changes** in the Changes picker shows what changed in the checkout since the latest push: commits not pushed, edits and new files. A file’s ⋯ menu has **Discard Changes…** In All changes, which is the latest push, a file you edited says **Edited locally** and leads there.
