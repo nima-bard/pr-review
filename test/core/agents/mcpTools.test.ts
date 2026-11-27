@@ -105,7 +105,7 @@ describe('PR Review MCP tools', () => {
   it('offer_choices takes a short question and up to four choices, and tells Claude to end its answer', async () => {
     const { call } = await connect(fakeBridge().bridge);
     const ok = await call('offer_choices', { question: 'Leave a comment?', choices: [{ label: 'Yes, leave a comment', prompt: 'Yes, write it.' }, { label: 'No', prompt: null }] });
-    expect(ok).toEqual({ isError: false, text: expect.stringContaining('End your answer now') });
+    expect(ok).toEqual({ isError: false, text: expect.stringContaining('End your turn now') });
     const five = Array.from({ length: 5 }, (_, i) => ({ label: `c${i}`, prompt: null }));
     expect((await call('offer_choices', { question: 'Too many?', choices: five })).isError).toBe(true);
   });

@@ -25,6 +25,8 @@ type Message =
   | { type: 'result'; subtype?: string; is_error?: boolean; result?: string; session_id?: string; total_cost_usd?: number; errors?: string[] };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+/** Claude Code has passed `run_in_background` both as a boolean and as the string "true". */
+const inBackground = (input: Record<string, unknown>) => input.run_in_background === true || input.run_in_background === 'true';
 const clip = (s: string, n = 80) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** A tool call as one line for the conversation, or null for plumbing not worth showing. */
@@ -56,7 +58,10 @@ export function describeTool(name: string, input: Record<string, unknown>): stri
     case 'Glob':
       return `Listed ${clip(str(input.pattern), 60)}`;
     case 'Bash':
-      return `Ran ${clip(str(input.command))}`;
+      return `${inBackground(input) ? 'Started in the background:' : 'Ran'} ${clip(str(input.command))}`;
+    case 'Agent':
+    case 'Task':
+      return `${inBackground(input) ? 'Started an agent in the background' : 'Asked an agent'}: ${clip(str(input.description) || 'a task', 60)}`;
     case 'Skill':
       return `Used the ${str(input.skill) || str(input.command)} skill`;
     case 'Edit':

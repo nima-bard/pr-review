@@ -41,10 +41,22 @@ export function modelLabel(models: readonly ClaudeModel[], c: ClaudeModelChoice)
   return { model: name, effort };
 }
 
-/** The conversation's model menu: the models, and going back to Settings › Claude's default (which it uses now, or not). */
+/** A context window as the model menu says it: "1M context", "200k context". */
+export function contextSize(tokens: number): string {
+  return tokens >= 1_000_000 ? `${Math.round((tokens / 1_000_000) * 10) / 10}M context` : `${Math.round(tokens / 1000)}k context`;
+}
+
+/**
+ * The conversation's model menu: the models (each with how big its context is, when Claude Code said), and going back
+ * to Settings › Claude's default (which it uses now, or not).
+ */
 export function modelMenuItems(models: readonly ClaudeModel[], c: ClaudeModelChoice, fromSettings: boolean): ContextMenuItem[] {
   return [
-    ...modelChoices(models, c.model).map((m) => ({ id: `model:${m.value}`, label: m.description ? `${m.name} · ${m.description}` : m.name, checked: !fromSettings && m.value === c.model })),
+    ...modelChoices(models, c.model).map((m) => ({
+      id: `model:${m.value}`,
+      label: [m.name, m.description, m.contextWindow ? contextSize(m.contextWindow) : ''].filter(Boolean).join(' · '),
+      checked: !fromSettings && m.value === c.model,
+    })),
     'separator',
     { id: 'default', label: 'The default from Settings › Claude', checked: fromSettings },
   ];
@@ -204,16 +216,27 @@ export function readPrompt(text: string): AgentRequest | null {
  */
 export function claudeSystemPrompt(snapshot: PrSnapshot): string {
   const { key, details, worktree } = snapshot;
+  const branch = worktree.checkout === 'editing' ? worktree.branch : null;
+  const change = branch
+    ? [
+        `The checkout is on the pull request's branch ${branch}, where the user contributes. When the user asks you to change the code (fix, rename, refactor…), change the files and say in a line or two what you changed. Commit or push only when the user asks you to: commit on this branch, push it to the pull request's branch, never force-push, and never switch branches. The user sees uncommitted changes and unpushed commits under Local changes in PR Review.`,
+        `- A request to change the code: change the files (see the last rule). A request for a review comment, or a reply to a thread: add exactly one with the pr-review tool add_draft (pr "${key}"; for lines, where their context says), and say in your reply what it says.`,
+      ]
+    : [
+        'The checkout is read only: it follows the pull request’s latest push. Don’t change files; the user can switch PR Review to Contribute (on the branch) for that.',
+        `- A request for a comment, or for a change to the code or its wording (rephrase, rename, fix, suggest…): add exactly one review comment with the pr-review tool add_draft (pr "${key}"; for lines, where their context says), and say in your reply what it says.`,
+      ];
   return [
     `You are working inside PR Review, the macOS app where the user reviews GitHub pull request ${details.url} (PR Review key "${key}"). It is checked out at ${worktree.path}, your working directory: use it instead of creating another worktree.`,
     `Prompts from PR Review start with a header: "PR Review · request", "PR Review · <path>, new|old lines A–B" for a question about those lines, "PR Review · thread <id> on <path>…" for one about a review thread, or "PR Review · file <path>" for one about the file the user has open. After the user's words, "${CONTEXT}" gives the thread, the lines' code, the review comments on them and where a new comment there goes.`,
     'How to respond: decide from each request whether it asks a question, asks you to do something in PR Review, or asks for a review comment.',
     '- A question, or a request to check, investigate or explain something: answer it in your reply only. Do not add a review comment, even if you find a problem: describe it in the answer, and the user can ask for a comment.',
     '- A request to do something in PR Review (mark files as viewed, show or find a file, a line, a comment or where something is): do it with the pr-review tools (set_viewed, show_in_app, search_code with show), then say in one line what you did. get_pr lists the files, which are viewed, and the review threads.',
-    `- A request for a comment, or for a change to the code or its wording (rephrase, rename, fix, suggest…): add exactly one review comment with the pr-review tool add_draft (pr "${key}"; for lines, where their context says), and say in your reply what it says.`,
-    'If your answer leads to one follow-up you could do in PR Review (a review comment, marking files as viewed, showing something), don’t ask about it in words: end with the pr-review tool offer_choices, a short question and its choices (e.g. "Yes, leave a comment", with the prompt to send you, and "No"), then stop.',
+    change[1]!,
+    'If your answer leads to one follow-up you could do in PR Review (a review comment, marking files as viewed, showing something), offer it with the pr-review tool offer_choices instead of asking in words. Your answer comes first and is complete on its own: what you found, and for a comment what it would say. The user reads your answer, not the choices’ prompts, so never leave a conclusion to a choice. Call offer_choices last, with a short question and its choices (e.g. "Yes, leave a comment", with the prompt to send you, and "No"), and write nothing after it: no word about the buttons.',
     'When a request needs reading across many files, have a subagent do the search and keep only what it found, so this conversation stays short. Keep answers short: the user reads them in a side panel.',
-    'Never post anything to GitHub: review comments go to the user’s review as drafts, with add_draft, and the user submits them.',
+    'Never post review comments, reviews or replies to GitHub yourself: they go to the user’s review as drafts, with add_draft, and the user submits them.',
+    change[0]!,
   ].join('\n');
 }
 

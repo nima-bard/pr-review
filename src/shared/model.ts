@@ -407,7 +407,25 @@ export interface PrSnapshot {
   viewerAvatarUrl: string | null;
   details: PrDetails;
   clonePath: string;
-  worktree: { path: string; mode: 'branch' | 'detached'; owned: boolean; behind: boolean };
+  worktree: {
+    path: string;
+    mode: 'branch' | 'detached';
+    owned: boolean;
+    /** The checkout isn't at the pull request's latest push (the diffs use that push). */
+    behind: boolean;
+    /** Read only, following each push, or on the branch for editing (see `CheckoutMode`). */
+    checkout: CheckoutMode;
+    /** The branch it's on, or null when it's detached. */
+    branch: string | null;
+    /** Files with changes not committed, new files included. */
+    uncommitted: string[];
+    /** On a branch: its commits not pushed yet, and pushed commits it doesn't have yet. */
+    sync: { ahead: number; behind: number } | null;
+    /** Whether you can push to the pull request's branch (write access, or a fork that's yours or lets maintainers edit). */
+    canPush: boolean;
+    /** When the checkout was last looked at: Local changes' diffs load again after it, so an edit shows. */
+    checkedAt: number;
+  };
   mergeBase: string;
   files: FileEntry[];
   threads: ThreadView[];
@@ -419,6 +437,17 @@ export interface PrSnapshot {
   compare: { from: string; label: string } | null;
   syncedAt: string;
 }
+
+/**
+ * How PR Review has a pull request checked out, shown as Review and Contribute. Reading (Review): its own worktree,
+ * detached at the latest push and moved along with each new one; Claude may only read. Editing (Contribute): on the pull
+ * request's branch (your own checkout of it, if you have one), where you (in your editor) and Claude change files, then
+ * commit, pull and push from PR Review.
+ */
+export type CheckoutMode = 'reading' | 'editing';
+
+/** The comparison (`setCompare`'s `from`) that shows what changed in the checkout since the latest push. */
+export const LOCAL_CHANGES = 'local';
 
 /** Just enough of a PR to label a tab that hasn't been opened yet. */
 export interface PrSummary {
@@ -550,6 +579,8 @@ export interface Settings {
   guessThreshold: number;
   aiEnabled: boolean;
   aiModel: string;
+  /** Switching between read only and editing first explains what changes (until you tick "Don't explain this again"). */
+  explainCheckout: boolean;
   oauthClientId: string;
   /** App colour theme, an id from APP_THEMES (shared/themes.ts). */
   appTheme: string;
@@ -600,6 +631,8 @@ export interface ClaudeModel {
   description: string;
   /** The effort levels it supports; empty when it has none. */
   efforts: ClaudeEffort[];
+  /** How many tokens its context holds for your account, as Claude Code says (1M for most current models). */
+  contextWindow?: number;
 }
 
 /** The models to choose from: Claude Code's own list, or a standard one when it couldn't be read. */
@@ -664,6 +697,14 @@ export interface Exchange {
   done: boolean;
 }
 
+/** Something Claude started in the background (a subagent, or a shell command) that is still running. */
+export interface ClaudeBackgroundTask {
+  id: string;
+  /** What it does, as Claude described it when it started it. */
+  description: string;
+  kind: 'agent' | 'command' | 'other';
+}
+
 /** Choices Claude offers after an answer: a short question, and buttons that send their prompt back to it. */
 export interface ClaudeOffer {
   question: string;
@@ -687,6 +728,11 @@ export interface ClaudeView {
   pending: PendingRequest[];
   /** Who is answering in the session now: the app, Claude Desktop or Claude Code. */
   busy: 'app' | ClaudeApp | null;
+  /**
+   * What Claude started in the background and is still running, in the app's `claude` (it knows only its own). Claude
+   * answers again when one finishes, in the same exchange.
+   */
+  background: ClaudeBackgroundTask[];
   /** Questions wait because Claude Desktop is answering or Claude Code has the session open. */
   waitingFor: ClaudeApp | null;
   /** Line questions whose marker you removed from the diff. */

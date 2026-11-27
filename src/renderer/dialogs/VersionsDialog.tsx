@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { CommitsData, PrSnapshot } from '../../shared/model';
+import { LOCAL_CHANGES, type CommitsData, type PrSnapshot } from '../../shared/model';
 import { api, errorText } from '../api';
 import { setSessionError } from '../state/sessions';
 import { Badge, Button, cx, ErrorBox, Icon, Spinner, shortSha, timeAgo } from '../components/ui';
@@ -55,6 +55,21 @@ export function VersionsDialog({ snapshot }: { snapshot: PrSnapshot }) {
           </button>
         </div>
         <div role="radiogroup" aria-label="Presets" className="px-2 py-1.5 border-b border-line-2">
+          {(snapshot.worktree.checkout === 'editing' || snapshot.worktree.uncommitted.length > 0) && (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={from === LOCAL_CHANGES}
+              onClick={() => setFrom(LOCAL_CHANGES)}
+              className={cx('flex w-full gap-2.5 items-start text-left px-2 py-2 rounded-lg cursor-pointer', from === LOCAL_CHANGES && 'bg-active')}
+            >
+              <span className="w-4 pt-0.5 text-accent">{from === LOCAL_CHANGES && <Icon name="check" size={15} />}</span>
+              <span className="flex flex-col gap-0.5">
+                <span className="font-semibold text-strong text-[13.5px]">Local changes</span>
+                <span className="text-muted text-[12px]">what changed in the checkout since the latest push: commits not pushed, edits and new files</span>
+              </span>
+            </button>
+          )}
           {lastVersion && last !== head && (
             <button type="button" role="radio" aria-checked={from === last} onClick={() => setFrom(last)} className={cx('flex w-full gap-2.5 items-start text-left px-2 py-2 rounded-lg cursor-pointer', from === last && 'bg-active')}>
               <span className="w-4 pt-0.5 text-accent">{from === last && <Icon name="check" size={15} />}</span>
@@ -140,13 +155,15 @@ export function VersionsDialog({ snapshot }: { snapshot: PrSnapshot }) {
             ))}
         </div>
         <div className="flex items-center gap-2.5 px-4 py-3 bg-panel border-t border-line-2">
-          <span className="flex-1 text-[12px] text-muted">{from === null ? 'All changes in the PR' : `${selectedCount} commit${selectedCount === 1 ? '' : 's'} up to head`}</span>
+          <span className="flex-1 text-[12px] text-muted">
+            {from === null ? 'All changes in the PR' : from === LOCAL_CHANGES ? 'Changes in the checkout' : `${selectedCount} commit${selectedCount === 1 ? '' : 's'} up to head`}
+          </span>
           <Button onClick={close}>Cancel</Button>
           <Button
             variant="primary"
             onClick={() => {
               close();
-              showChanges(key, from, from === null ? 'All changes' : from === last ? 'Since your last review' : `Since ${shortSha(from)}`);
+              showChanges(key, from, from === null ? 'All changes' : from === LOCAL_CHANGES ? 'Local changes' : from === last ? 'Since your last review' : `Since ${shortSha(from)}`);
             }}
           >
             Show changes

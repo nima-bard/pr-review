@@ -62,10 +62,10 @@ export function DetailsPanel({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnap
   );
 }
 
-/** Whether Claude is answering or has a question on its way, for a spinner on its button. */
+/** Whether Claude is answering, has a question on its way, or something running in the background, for a spinner on its button. */
 export function useClaudeWorking(key: string): boolean {
   const view = useClaudeView(key);
-  return view !== undefined && (view.busy !== null || view.pending.some((p) => p.state !== 'failed'));
+  return view !== undefined && (view.busy !== null || view.background.length > 0 || view.pending.some((p) => p.state !== 'failed'));
 }
 
 /** A small spinner for Claude while it's answering. */

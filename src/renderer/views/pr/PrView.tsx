@@ -12,6 +12,7 @@ import { prView, updateUi, usePrUi, type PrViewKind } from '../../state/ui';
 import { RunsDialog, RunsIndicator } from './ActionRuns';
 import { showActionsMenu } from '../../state/quickActions';
 import { FilesView } from './FilesView';
+import { CheckoutBar, CheckoutSwitch, CommitDialog, SwitchDialog } from './Checkout';
 import { useClaudeSettings } from '../../state/claude';
 import { loadClaudeView } from '../../state/sessions';
 
@@ -82,8 +83,9 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
   const since = snapshot ? sinceLastReview(snapshot) : null;
   const drafts = snapshot?.drafts.length ?? 0;
   return (
-    // The views are chosen in the strip of icons on the left; here the title, and the buttons for the view you're in.
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
+    // The views are chosen in the strip of icons on the left; here the title, Review · Contribute in the middle, and the
+    // buttons for the view you're in.
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
       <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <StateBadge pr={pr} />
@@ -98,6 +100,8 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
           <code className="font-mono text-[11.5px] px-1.5 rounded bg-branch-bg text-branch">{d.baseRefName}</code> · <span className="text-add">+{d.additions}</span> <span className="text-del">−{d.deletions}</span>
         </div>
       </div>
+      {/* Its place is kept while the pull request loads, so the header doesn't shift when it appears. */}
+      {snapshot ? <CheckoutSwitch snapshot={snapshot} /> : <span aria-hidden="true" className="w-[204px] h-8" />}
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-2 min-w-0">
         {view === 'files' && snapshot && (
           <>
@@ -160,13 +164,19 @@ function StatusBar({ snapshot }: { snapshot: PrSnapshot }) {
     <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1 bg-titlebar border-t border-line text-muted text-[11.5px] flex-none">
       <span className="inline-flex items-center gap-1.5">
         <Icon name="folder" size={12} />
-        {snapshot.worktree.owned ? 'Worktree' : snapshot.role === 'author' ? 'Your checkout' : 'Reused worktree'}{' '}
+        {snapshot.worktree.owned ? 'Worktree' : 'Your checkout'}{' '}
         <span className="font-mono text-fg">{snapshot.worktree.path.replace(/^\/Users\/[^/]+/, '~')}</span>
       </span>
-      <span>
-        {snapshot.worktree.mode === 'detached' ? 'detached at' : 'head'} <span className="font-mono text-fg">{shortSha(snapshot.details.headRefOid)}</span>
-      </span>
-      {snapshot.worktree.behind && <span className="text-warn">checkout differs from PR head (diffs use the PR head)</span>}
+      {snapshot.worktree.checkout === 'editing' && snapshot.worktree.branch ? (
+        <span className="text-accent">
+          contributing on <span className="font-mono">{snapshot.worktree.branch}</span>
+        </span>
+      ) : (
+        <span>
+          reviewing at <span className="font-mono text-fg">{shortSha(snapshot.details.headRefOid)}</span>
+        </span>
+      )}
+      {snapshot.worktree.checkout === 'reading' && snapshot.worktree.behind && <span className="text-warn">not at the latest push yet (diffs use the push)</span>}
       <span>
         merge-base <span className="font-mono text-fg">{shortSha(snapshot.mergeBase)}</span> on {snapshot.details.baseRefName}
       </span>
@@ -213,6 +223,7 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   return (
     <div className="h-full flex flex-col">
       <Header pr={pr} snapshot={snapshot} view={view} />
+      {snapshot && <CheckoutBar snapshot={snapshot} />}
       {error && (
         <div className="px-4 py-2 bg-del-subtle border-b border-del-line">
           <ErrorBox message={error} onRetry={() => void (snapshot ? api.refreshPr(prKey) : retryPr(prKey))} />
@@ -233,6 +244,8 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
       )}
       {snapshot && ui.showSubmit && <SubmitReviewDialog snapshot={snapshot} />}
       {snapshot && ui.showVersions && <VersionsDialog snapshot={snapshot} />}
+      {snapshot && ui.showCommit && <CommitDialog snapshot={snapshot} />}
+      {snapshot && ui.confirmCheckout && <SwitchDialog snapshot={snapshot} to={ui.confirmCheckout} />}
       {snapshot && ui.showMerge && <MergeDialog snapshot={snapshot} />}
       {ui.showRuns && <RunsDialog prKey={prKey} />}
     </div>

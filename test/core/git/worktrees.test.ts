@@ -35,53 +35,56 @@ describe('planWorktree', () => {
   const owned = '/src/app.worktrees/pr-7';
   const base = { ownedPath: owned, headRefName: 'feature/x', headOid: 'h1' };
 
-  it('author: reuses the worktree on the PR branch and never moves it', () => {
-    const plan = planWorktree({ ...base, role: 'author', worktrees: [wt({ path: '/src/wt-x', branch: 'feature/x', head: 'old' })] });
+  it('editing: uses the checkout on the PR branch, yours too, and never moves it', () => {
+    const plan = planWorktree({ ...base, checkout: 'editing', worktrees: [wt({ path: '/src/wt-x', branch: 'feature/x', head: 'old' })] });
     expect(plan).toEqual({ kind: 'reuse', path: '/src/wt-x', mode: 'branch', mayMove: false, owned: false });
   });
 
-  it('author: creates a branch worktree when the branch is not checked out', () => {
-    expect(planWorktree({ ...base, role: 'author', worktrees: [wt({ path: '/src/app', branch: 'main' })] })).toEqual({
+  it('editing: creates a worktree on the branch when neither it nor the app’s own is there', () => {
+    expect(planWorktree({ ...base, checkout: 'editing', worktrees: [wt({ path: '/src/app', branch: 'main' })] })).toEqual({
       kind: 'create-branch',
       path: owned,
     });
   });
 
-  it('reviewer: prefers the owned path and may move it when detached and unlocked', () => {
-    const plan = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: owned, detached: true, head: 'old' })] });
+  it('reading: uses the app’s own worktree and may move it when detached and unlocked', () => {
+    const plan = planWorktree({ ...base, checkout: 'reading', worktrees: [wt({ path: owned, detached: true, head: 'old' })] });
     expect(plan).toMatchObject({ kind: 'reuse', path: owned, mode: 'detached', mayMove: true, owned: true });
   });
 
-  it('reviewer: never moves a locked owned worktree', () => {
-    const plan = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: owned, detached: true, locked: '' })] });
+  it('reading: never moves a locked owned worktree', () => {
+    const plan = planWorktree({ ...base, checkout: 'reading', worktrees: [wt({ path: owned, detached: true, locked: '' })] });
     expect(plan).toMatchObject({ kind: 'reuse', mayMove: false });
   });
 
-  it('reviewer: reuses a foreign worktree at head, then one on the branch, read-only', () => {
-    const atHead = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: '/tmp/a', detached: true, head: 'h1' })] });
-    expect(atHead).toMatchObject({ kind: 'reuse', path: '/tmp/a', mayMove: false, owned: false });
-    const onBranch = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: '/src/wt-x', branch: 'feature/x', head: 'old' })] });
-    expect(onBranch).toMatchObject({ kind: 'reuse', path: '/src/wt-x', mode: 'branch', mayMove: false });
+  it('reading: never borrows a checkout of yours, at the head or on the branch, but makes its own', () => {
+    const yours = [wt({ path: '/tmp/a', detached: true, head: 'h1' }), wt({ path: '/src/wt-x', branch: 'feature/x', head: 'old' })];
+    expect(planWorktree({ ...base, checkout: 'reading', worktrees: yours })).toEqual({ kind: 'create-detached', path: owned });
   });
 
-  it('reviewer: ignores prunable worktrees and creates a detached one', () => {
-    const plan = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: owned, prunable: 'gone' })] });
+  it('switches the app’s own worktree between them: onto the branch to edit, back off it to read', () => {
+    expect(planWorktree({ ...base, checkout: 'editing', worktrees: [wt({ path: owned, detached: true, head: 'h1' })] })).toEqual({ kind: 'attach', path: owned });
+    expect(planWorktree({ ...base, checkout: 'reading', worktrees: [wt({ path: owned, branch: 'feature/x', head: 'h1' })] })).toEqual({ kind: 'detach', path: owned });
+  });
+
+  it('reading: ignores prunable worktrees and creates a detached one', () => {
+    const plan = planWorktree({ ...base, checkout: 'reading', worktrees: [wt({ path: owned, prunable: 'gone' })] });
     expect(plan).toEqual({ kind: 'create-detached', path: owned });
   });
 
   it('matches paths case-insensitively (macOS)', () => {
-    const plan = planWorktree({ ...base, role: 'reviewer', worktrees: [wt({ path: owned.toUpperCase(), detached: true })] });
+    const plan = planWorktree({ ...base, checkout: 'reading', worktrees: [wt({ path: owned.toUpperCase(), detached: true })] });
     expect(plan.kind).toBe('reuse');
   });
 
-  it('still takes a worktree where an earlier version put it as its own, for both roles', () => {
+  it('still takes a worktree where an earlier version put it as its own, reading or editing', () => {
     const legacyPath = '/wt/wt-pr-7';
-    const reviewer = planWorktree({ ...base, legacyPath, role: 'reviewer', worktrees: [wt({ path: legacyPath, detached: true, head: 'old' })] });
+    const reviewer = planWorktree({ ...base, legacyPath, checkout: 'reading', worktrees: [wt({ path: legacyPath, detached: true, head: 'old' })] });
     expect(reviewer).toMatchObject({ kind: 'reuse', path: legacyPath, owned: true, mayMove: true });
-    const author = planWorktree({ ...base, legacyPath, role: 'author', worktrees: [wt({ path: legacyPath, branch: 'feature/x' })] });
+    const author = planWorktree({ ...base, legacyPath, checkout: 'editing', worktrees: [wt({ path: legacyPath, branch: 'feature/x' })] });
     expect(author).toMatchObject({ kind: 'reuse', path: legacyPath, owned: true });
     // Without one, a new worktree goes to the new place.
-    expect(planWorktree({ ...base, legacyPath, role: 'reviewer', worktrees: [] })).toEqual({ kind: 'create-detached', path: owned });
+    expect(planWorktree({ ...base, legacyPath, checkout: 'reading', worktrees: [] })).toEqual({ kind: 'create-detached', path: owned });
   });
 });
 

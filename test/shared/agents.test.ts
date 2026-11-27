@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { askPrefix, asks, claudePrompt, claudeSystemPrompt, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, promptHeader, readPrompt, requestLabel, sessionTitle } from '../../src/shared/agents';
+import { askPrefix, asks, claudePrompt, claudeSystemPrompt, contextSize, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, promptHeader, readPrompt, requestLabel, sessionTitle } from '../../src/shared/agents';
 import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, PrSnapshot } from '../../src/shared/model';
 
 const snap = { key: 'github.com/o/r#7', details: { url: 'https://github.com/o/r/pull/7' }, worktree: { path: '/wt/pr-7' } } as unknown as PrSnapshot;
@@ -20,6 +20,17 @@ describe('askPrefix', () => {
 });
 
 describe('claudeSystemPrompt', () => {
+  it('tells Claude whether it may change files: reviewing it suggests a change as a comment, contributing it makes it, and commits only when asked', () => {
+    const reading = claudeSystemPrompt({ ...snap, worktree: { path: '/wt/pr-7', checkout: 'reading', branch: null } } as unknown as PrSnapshot);
+    expect(reading).toContain('The checkout is read only');
+    expect(reading).toContain('or for a change to the code or its wording (rephrase, rename, fix, suggest…): add exactly one review comment');
+    const editing = claudeSystemPrompt({ ...snap, worktree: { path: '/wt/pr-7', checkout: 'editing', branch: 'feature/x' } } as unknown as PrSnapshot);
+    expect(editing).toContain("The checkout is on the pull request's branch feature/x, where the user contributes");
+    expect(editing).toContain('Commit or push only when the user asks you to');
+    expect(editing).toContain('never force-push');
+    expect(editing).not.toContain('The checkout is read only');
+  });
+
   it('says where the pull request is checked out, how to respond, and that comments go to the review as drafts', () => {
     const p = claudeSystemPrompt(snap);
     expect(p).toContain('https://github.com/o/r/pull/7');
@@ -27,7 +38,11 @@ describe('claudeSystemPrompt', () => {
     expect(p).toContain('A question, or a request to check, investigate or explain something: answer it in your reply only. Do not add a review comment');
     expect(p).toContain('set_viewed, show_in_app, search_code with show');
     expect(p).toContain('add_draft (pr "github.com/o/r#7"');
-    expect(p).toContain('end with the pr-review tool offer_choices');
+    // The choices come after a complete answer: what Claude found is never only in a button's prompt (the user doesn't read those).
+    expect(p).toContain('offer it with the pr-review tool offer_choices');
+    expect(p).toContain('Your answer comes first and is complete on its own');
+    expect(p).toContain('never leave a conclusion to a choice');
+    expect(p).toContain('write nothing after it');
     expect(p).toContain('have a subagent do the search');
   });
 });
@@ -96,6 +111,7 @@ describe('asks', () => {
     exchanges,
     pending: [{ id: 'p1', request: lines, state: 'waiting', error: null }],
     busy,
+    background: [],
     waitingFor: null,
     hiddenMarkers: [],
     dismissedOffers: [],
@@ -149,6 +165,17 @@ describe('the conversation’s model picker', () => {
     expect(ids(modelMenuItems(models, { model: '', effort: '' }, true))).toEqual(['model:', 'model:claude-fable-5-2', 'model:claude-haiku-4-5', '-', 'default*']);
     expect(ids(effortMenuItems(models, { model: 'claude-fable-5-2', effort: 'high' }))).toEqual(['effort:', 'effort:low', 'effort:high*']);
     expect(hasEfforts(models, { model: 'claude-haiku-4-5', effort: '' })).toBe(false);
+  });
+
+  it('says how big each model’s context is in the menu, where Claude Code said', () => {
+    const sized: ClaudeModel[] = [
+      { value: 'opus', name: 'Opus 5.5', description: 'For complex work', efforts: [], contextWindow: 1_000_000 },
+      { value: 'claude-opus-4-6', name: 'Opus 4.6', description: '', efforts: [], contextWindow: 200_000 },
+      { value: 'haiku', name: 'Haiku 5.5', description: 'Fastest', efforts: [] },
+    ];
+    const labels = modelMenuItems(sized, { model: 'opus', effort: '' }, false).flatMap((i) => (i === 'separator' ? [] : [i.label]));
+    expect(labels).toEqual(['Claude Code’s default', 'Opus 5.5 · For complex work · 1M context', 'Opus 4.6 · 200k context', 'Haiku 5.5 · Fastest', 'The default from Settings › Claude']);
+    expect(contextSize(1_500_000)).toBe('1.5M context');
   });
 
   it('turns a choice into the model and effort to use, keeping the effort only where the model has it', () => {

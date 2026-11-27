@@ -2,7 +2,8 @@ import { FileDiff } from '@pierre/diffs/react';
 import type { DiffLineAnnotation, FileDiffMetadata, SelectedLineRange } from '@pierre/diffs';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { asks as allAsks, type Ask } from '../../shared/agents';
-import type { DiffSide, Draft, FileEntry, PrSnapshot, ThreadView } from '../../shared/model';
+import { LOCAL_CHANGES, type DiffSide, type Draft, type FileEntry, type PrSnapshot, type ThreadView } from '../../shared/model';
+import { showLocalChanges } from '../views/pr/Checkout';
 import { api } from '../api';
 import { Badge, Button, cx, Icon, Spinner } from '../components/ui';
 import { openFileTab, requestComposer, updateUi, usePrefs, usePrUi, type ComposerTarget } from '../state/ui';
@@ -37,6 +38,9 @@ export function threadsForFile(snapshot: PrSnapshot, path: string): ThreadView[]
  * into the current code. No file section shows them, so All changes and the tree list them separately.
  */
 export function strayThreads(snapshot: PrSnapshot): ThreadView[] {
+  // A comparison (since a commit, Local changes) lists only some of the pull request's files: a thread on another one
+  // isn't lost, just not part of it. Comments that are lost show with All changes (and in the Comments panel).
+  if (snapshot.compare) return [];
   const files = new Set(snapshot.files.map((f) => f.path));
   return snapshot.threads.filter((t) => !files.has(t.anchor.path) && !(t.anchor.line === undefined && files.has(t.path)));
 }
@@ -79,7 +83,9 @@ interface DiffBodyProps {
 const DiffBody = memo(function DiffBody({ snapshot, file, fullFile }: DiffBodyProps) {
   const key = snapshot.key;
   const ui = usePrUi(key);
-  const version = `${snapshot.details.headRefOid}:${snapshot.mergeBase}`;
+  // A diff is kept per comparison; Local changes' load again whenever the checkout was looked at (an edit, a commit).
+  const local = snapshot.compare?.from === LOCAL_CHANGES;
+  const version = `${snapshot.details.headRefOid}:${snapshot.mergeBase}:${snapshot.compare?.from ?? ''}${local ? `:${snapshot.worktree.checkedAt}` : ''}`;
   const { data, error, loading } = useFileDiff(key, version, file.path, true, snapshot.compare === null);
   const hideResolved = usePrefs((p) => p.hideResolved);
   const wordWrap = usePrefs((p) => p.wordWrap);
@@ -335,6 +341,12 @@ export function FileSection({ snapshot, file, threadCount }: { snapshot: PrSnaps
         </span>
         {file.generated && <Badge>Generated</Badge>}
         {file.viewed === 'DISMISSED' && <Badge tone="warn">Changed since viewed</Badge>}
+        {/* The diff is the latest push; edits in the checkout are under Local changes. */}
+        {snapshot.compare?.from !== LOCAL_CHANGES && snapshot.worktree.uncommitted.includes(file.path) && (
+          <button type="button" title="Changed in the checkout and not committed: this diff is the latest push. Show Local changes." onClick={() => showLocalChanges(key)} className="cursor-pointer">
+            <Badge tone="info">Edited locally</Badge>
+          </button>
+        )}
         <span className="flex-1" />
         {threadCount > 0 && <span className="text-muted text-[12px]">{threadCount === 1 ? '1 thread' : `${threadCount} threads`}</span>}
         <button

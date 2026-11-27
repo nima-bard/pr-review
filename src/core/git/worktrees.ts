@@ -80,13 +80,22 @@ export function legacyWorktreePath(prNumber: number, root?: string | null): stri
 export type WorktreePlan =
   | { kind: 'reuse'; path: string; mode: 'branch' | 'detached'; mayMove: boolean; owned: boolean }
   | { kind: 'create-detached'; path: string }
-  | { kind: 'create-branch'; path: string };
+  | { kind: 'create-branch'; path: string }
+  /** The app's own worktree, detached: it goes onto the pull request's branch, for editing. */
+  | { kind: 'attach'; path: string }
+  /** The app's own worktree, on a branch: it goes back to following the pull request, detached. */
+  | { kind: 'detach'; path: string };
 
 export function samePath(a: string, b: string): boolean {
   const norm = (p: string) => p.replace(/\/+$/, '').toLowerCase();
   return norm(a) === norm(b);
 }
 
+/**
+ * Where the pull request is checked out. Reading always uses the app's own worktree, detached, which it moves along
+ * with each push (never one of yours). Editing uses the checkout that has the pull request's branch, yours too (git
+ * allows a branch in one worktree only); else the app's own goes onto it, or a new one is made on it.
+ */
 export function planWorktree(input: {
   worktrees: readonly Worktree[];
   ownedPath: string;
@@ -94,32 +103,19 @@ export function planWorktree(input: {
   legacyPath?: string | null;
   headRefName: string;
   headOid: string;
-  role: 'author' | 'reviewer';
+  checkout: 'reading' | 'editing';
 }): WorktreePlan {
   const live = input.worktrees.filter((w) => w.prunable === null && !w.bare);
   const ours = (path: string) => samePath(path, input.ownedPath) || (!!input.legacyPath && samePath(path, input.legacyPath));
-  const onBranch = live.find((w) => w.branch === input.headRefName);
-  if (input.role === 'author') {
-    return onBranch
-      ? { kind: 'reuse', path: onBranch.path, mode: 'branch', mayMove: false, owned: ours(onBranch.path) }
-      : { kind: 'create-branch', path: input.ownedPath };
-  }
   const owned = live.find((w) => samePath(w.path, input.ownedPath)) ?? live.find((w) => ours(w.path));
-  if (owned) {
-    return {
-      kind: 'reuse',
-      path: owned.path,
-      mode: owned.detached ? 'detached' : 'branch',
-      mayMove: owned.detached && owned.locked === null,
-      owned: true,
-    };
+  if (input.checkout === 'editing') {
+    const onBranch = live.find((w) => w.branch === input.headRefName);
+    if (onBranch) return { kind: 'reuse', path: onBranch.path, mode: 'branch', mayMove: false, owned: ours(onBranch.path) };
+    return owned ? { kind: 'attach', path: owned.path } : { kind: 'create-branch', path: input.ownedPath };
   }
-  const atHead = live.find((w) => w.head === input.headOid);
-  if (atHead) {
-    return { kind: 'reuse', path: atHead.path, mode: atHead.detached ? 'detached' : 'branch', mayMove: false, owned: false };
-  }
-  if (onBranch) return { kind: 'reuse', path: onBranch.path, mode: 'branch', mayMove: false, owned: false };
-  return { kind: 'create-detached', path: input.ownedPath };
+  if (!owned) return { kind: 'create-detached', path: input.ownedPath };
+  if (!owned.detached) return { kind: 'detach', path: owned.path };
+  return { kind: 'reuse', path: owned.path, mode: 'detached', mayMove: owned.locked === null, owned: true };
 }
 
 export function pullRefspec(prNumber: number): string {

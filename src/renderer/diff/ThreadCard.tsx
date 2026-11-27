@@ -319,7 +319,14 @@ export function ThreadCard({
       {panel ? (
         <div className={cx('flex items-center gap-1.5 pl-2.5 pr-1.5 h-9 bg-subtle', expanded && 'border-b border-line')}>
           {chevron}
-          <button type="button" onClick={() => focusFile(key, thread.anchor.path, thread.id)} title={thread.anchor.path} className="flex items-baseline gap-1.5 min-w-0 flex-1 text-left cursor-pointer hover:underline" aria-label={`Show ${thread.anchor.path} in Files`}>
+          {/* The file and line are the way to the code. */}
+          <button
+            type="button"
+            onClick={() => focusFile(key, thread.anchor.path, thread.id)}
+            title={`Go to ${thread.anchor.path}${thread.anchor.line !== undefined ? `:${thread.anchor.line}` : ''}`}
+            className="flex items-baseline gap-1.5 min-w-0 flex-1 text-left cursor-pointer hover:underline"
+            aria-label={`Show ${thread.anchor.path} in Files`}
+          >
             {/* Like github.com, the folders give way first (cut from the left) so the file name stays readable. */}
             <span className="flex min-w-0 font-mono text-[12px]">
               {dir && (
@@ -337,9 +344,6 @@ export function ThreadCard({
               <Badge tone="warn">{uncertain.short}</Badge>
             </span>
           )}
-          <IconButton label={`Go to ${thread.anchor.path}${thread.anchor.line !== undefined ? `:${thread.anchor.line}` : ''}`} onClick={() => focusFile(key, thread.anchor.path, thread.id)}>
-            <Icon name="external" size={13} />
-          </IconButton>
           {thread.isResolved ? (
             <span title="Resolved" className="grid place-items-center w-7 h-7 text-add flex-none">
               <Octicon name="check-circle" size={15} label="Resolved" />

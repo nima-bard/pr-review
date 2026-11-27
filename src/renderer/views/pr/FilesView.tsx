@@ -97,7 +97,7 @@ function ContentTabs({ snapshot }: { snapshot: PrSnapshot }) {
               >
                 {t.kind === 'changes' ? <Icon name="list" size={13} /> : <FileIcon path={t.path} size={14} />}
                 {label}
-                {t.kind === 'changes' && <span className="text-muted text-[12px]">{snapshot.files.length} files</span>}
+                {t.kind === 'changes' && <span className="text-muted text-[12px]">{snapshot.files.length === 1 ? '1 file' : `${snapshot.files.length} files`}</span>}
                 {t.kind === 'file' && !t.changed && <span className="not-italic text-[11px] text-muted">read-only</span>}
               </button>
               {t.kind === 'file' && (

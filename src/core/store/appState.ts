@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { RepoMapping, Settings, Version } from '../../shared/model';
+import type { CheckoutMode, RepoMapping, Settings, Version } from '../../shared/model';
 import { readJson, writeJson } from './jsonStore';
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   guessThreshold: 0.5,
   aiEnabled: false,
   aiModel: 'haiku',
+  explainCheckout: true,
   oauthClientId: '',
   appTheme: 'github-dark',
   codeTheme: 'github-dark-default',
@@ -114,6 +115,20 @@ export class AppState {
     const s = await this.load();
     s.ownedWorktrees = s.ownedWorktrees.filter((p) => p !== path);
     await this.save();
+  }
+
+  private checkoutFile(prKey: string): string {
+    return join(this.dir, 'checkout', `${safeName(prKey)}.json`);
+  }
+
+  /** Whether a pull request was last read or edited (`CheckoutMode`); null when it's never been switched. */
+  async checkoutMode(prKey: string): Promise<CheckoutMode | null> {
+    const saved = await readJson<{ mode?: unknown }>(this.checkoutFile(prKey), {});
+    return saved.mode === 'reading' || saved.mode === 'editing' ? saved.mode : null;
+  }
+
+  async saveCheckoutMode(prKey: string, mode: CheckoutMode): Promise<void> {
+    await writeJson(this.checkoutFile(prKey), { mode });
   }
 
   versionsFile(prKey: string): string {

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { CodeSearchQuery } from '../../shared/model';
+import type { CheckoutMode, CodeSearchQuery } from '../../shared/model';
 import { hasUnsavedText, unsentKey, type ComposerTarget } from './unsent';
 import { moveToSlot } from './reorder';
 import { setViewContext } from './viewContext';
@@ -50,6 +50,10 @@ export interface PrUi {
   /** A question the Claude conversation should scroll to and highlight; `seq` repeats a jump to the same one. */
   focusAsk: { id: string; seq: number } | null;
   showVersions: boolean;
+  /** The dialog that commits the checkout's changes (while contributing on the branch). */
+  showCommit: boolean;
+  /** The dialog that explains a switch to Review or Contribute before it happens. */
+  confirmCheckout: CheckoutMode | null;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
   /** The left panel: the file tree, Find in files, or the commits (which take the place of the diffs too). */
@@ -104,6 +108,8 @@ const DEFAULT_UI: PrUi = {
   findFocusSeq: 0,
   findStep: { dir: 1, seq: 0 },
   showVersions: false,
+  showCommit: false,
+  confirmCheckout: null,
 };
 
 interface UiState {

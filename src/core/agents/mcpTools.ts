@@ -208,7 +208,8 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
       title: 'Offer follow-up choices',
       description:
         'Shows choices as buttons under your answer in PR Review, for one follow-up you could do there (add a review comment, mark files as viewed, show something…). ' +
-        'Call it as the last thing in your answer, at most once, instead of asking in words. It does not wait: end your answer, and the choice the user clicks arrives as their next message.',
+        'Write your whole answer first: the user reads it, and sees only each choice’s label and the start of its prompt, so a conclusion or what a comment would say belongs in the answer, not only in a prompt. ' +
+        'Call it as the last thing in your answer, at most once, instead of asking in words. It does not wait, and the buttons speak for themselves: write nothing after it. The choice the user clicks arrives as their next message.',
       inputSchema: {
         question: z.string().min(1).max(200).describe('One short line, e.g. "Leave a comment about the missing processors?"'),
         choices: z
@@ -223,7 +224,7 @@ export function registerReviewTools(server: McpServer, bridge: ReviewBridge, ori
       },
       annotations: { readOnlyHint: true },
     },
-    async () => text('PR Review shows these as buttons under your answer. End your answer now: the choice the user clicks arrives as their next message.'),
+    async () => text('PR Review shows these as buttons under your answer. End your turn now without another word (don’t describe the buttons): the choice the user clicks arrives as their next message.'),
   );
 }
 

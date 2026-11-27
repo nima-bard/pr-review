@@ -504,6 +504,10 @@ function GeneralPage() {
         from={clone ? shortPath(clone) : '~/source/my-app'}
         to={s.worktreeRoot ? `${shortPath(s.worktreeRoot)}/${slug ?? 'owner/my-app'}/pr-123` : `${clone ? shortPath(clone) : '~/source/my-app'}.worktrees/pr-123`}
       />
+      <label className="flex items-center gap-2.5 cursor-pointer text-[13px]">
+        <input type="checkbox" checked={s.explainCheckout} onChange={(e) => set({ explainCheckout: e.target.checked }, 0)} style={{ accentColor: 'var(--c-accent)' }} />
+        <span>Explain what changes when you switch a pull request between Review and Contribute</span>
+      </label>
       <Field label="Editor command" hint="For “Open in Editor”; called as <command> -g file:line (code, cursor, windsurf…).">
         <input value={s.editorCommand} onChange={(e) => set({ editorCommand: e.target.value })} className={INPUT} />
       </Field>

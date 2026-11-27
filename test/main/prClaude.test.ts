@@ -24,8 +24,10 @@ function setup(start: { sessionId?: string; exists?: boolean } = {}) {
   let settings: ClaudeSettings = { enabled: true, model: '', effort: '' };
   const processes: FakeProcess[] = [];
   const views: ClaudeView[] = [];
+  /** Context windows by model, as Claude Code's list of models would say. */
+  const windows = new Map<string, number>();
   const claude = new PrClaude({
-    prepare: async (request) => ({ worktree: '/wt', env: {}, title: 'PR #1 · T', prompt: `${promptHeader(request)}\n\n${request.prompt}`, systemPrompt: 'How to work with PR Review' }),
+    prepare: async (request) => ({ worktree: '/wt', env: {}, title: 'PR #1 · T', prompt: `${promptHeader(request)}\n\n${request.prompt}`, systemPrompt: 'How to work with PR Review', editing: false }),
     worktree: () => '/wt',
     settings: async () => settings,
     mcp: async () => ({ url: 'http://127.0.0.1:1/mcp', headers: {} }),
@@ -63,6 +65,7 @@ function setup(start: { sessionId?: string; exists?: boolean } = {}) {
       processes.push(proc);
       return proc;
     },
+    contextWindow: (model) => windows.get(model) ?? null,
     emit: (view) => void views.push(view),
   });
   /** Claude reads the oldest unread prompt of `proc` and answers it: both land in the session, and the turn ends. */
@@ -99,6 +102,7 @@ function setup(start: { sessionId?: string; exists?: boolean } = {}) {
     changeSettings: (patch: Partial<ClaudeSettings>) => {
       settings = { ...settings, ...patch };
     },
+    windows,
   };
 }
 
@@ -191,6 +195,21 @@ describe('PrClaude', () => {
     await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
     answer(processes[0]!, 'ok', { input_tokens: 300_000 }, 1_000_000);
     await vi.waitFor(() => expect(claude.view().context).toEqual({ tokens: 300_000, window: 1_000_000 }));
+  });
+
+  it('measures the context against the chosen model’s window as soon as Claude Code’s list says it, before any answer', async () => {
+    const { claude, processes, answer, windows, changeSettings } = setup({ sessionId: 's1' });
+    windows.set('', 1_000_000).set('claude-opus-4-6', 200_000);
+    claude.ask(ask('one'));
+    await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
+    answer(processes[0]!, 'ok', { input_tokens: 50_000 });
+    await vi.waitFor(() => expect(claude.view().context).toEqual({ tokens: 50_000, window: 1_000_000 }));
+    // Another model chosen: its window from the next look, not the one the last answer ran with.
+    changeSettings({ model: 'claude-opus-4-6' });
+    await claude.refresh(true);
+    expect(claude.view().context).toEqual({ tokens: 50_000, window: 200_000 });
+    await claude.chooseModel({ model: '', effort: '' });
+    expect(claude.view().context).toEqual({ tokens: 50_000, window: 1_000_000 });
   });
 
   it('waits while Claude Desktop is answering in the session, and sends once it is free', async () => {
@@ -304,5 +323,41 @@ describe('PrClaude', () => {
     expect(processes[0]!.calls).not.toContain('close');
     await vi.advanceTimersByTimeAsync(2000);
     expect(processes[0]!.calls).toContain('close');
+  });
+
+  it('keeps its claude while something runs in the background, shows it, and lets the session go a minute after it ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { claude, processes, views, answer } = setup({ sessionId: 's1' });
+    claude.ask(ask('find the callers'));
+    await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
+    const proc = processes[0]!;
+    proc.options.onBackground([{ id: 'a1', description: 'Find the callers', kind: 'agent' }]);
+    answer(proc, 'An agent is looking.');
+    expect(views.at(-1)?.background).toEqual([{ id: 'a1', description: 'Find the callers', kind: 'agent' }]);
+
+    // Ending the process would end the agent: not when idle, and not for Claude Desktop either.
+    await vi.advanceTimersByTimeAsync(IDLE_MS + 5000);
+    expect(proc.calls).not.toContain('close');
+    expect(await claude.release()).toBe(false);
+
+    proc.options.onBackground([]);
+    expect(views.at(-1)?.background).toEqual([]);
+    await vi.advanceTimersByTimeAsync(IDLE_MS - 1000);
+    expect(proc.calls).not.toContain('close');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(proc.calls).toContain('close');
+  });
+
+  it('sends a question to its claude as it is while something runs in the background, even with another model chosen', async () => {
+    const { claude, processes, answer, changeSettings } = setup({ sessionId: 's1' });
+    claude.ask(ask('one'));
+    await vi.waitFor(() => expect(processes[0]?.sent).toHaveLength(1));
+    processes[0]!.options.onBackground([{ id: 'b1', description: 'npm test', kind: 'command' }]);
+    answer(processes[0]!);
+    changeSettings({ model: 'opus' });
+    claude.ask(ask('two'));
+    await vi.waitFor(() => expect(processes[0]!.sent).toHaveLength(1));
+    expect(processes).toHaveLength(1);
+    expect(processes[0]!.calls).not.toContain('close');
   });
 });

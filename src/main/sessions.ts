@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pollDeviceToken, startDeviceFlow } from '../core/github/deviceFlow';
 import { TokenStore } from './tokenStore';
 import type { Api, InvokeMethods, ContextMenuItem } from '../shared/ipc';
-import { prKey, repoSlug, type AgentRequest, type ClaudeApp, type CodeSearchQuery, type CodeSearchResult, type Draft, type DraftOrigin, type FileDiffModel, type McpStatus, type PrSnapshot, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type RevealTarget, type StaleWorktree, type WorktreeInfo } from '../shared/model';
+import { prKey, repoSlug, type AgentRequest, type CheckoutMode, type ClaudeApp, type CodeSearchQuery, type CodeSearchResult, type Draft, type DraftOrigin, type FileDiffModel, type McpStatus, type PrSnapshot, type PrEvent, type PrRef, type BrowserExtensionInfo, type RepoMapping, type RevealTarget, type StaleWorktree, type WorktreeInfo } from '../shared/model';
 import { parsePrInput } from '../shared/prInput';
 import { GhTokenProvider } from '../core/github/auth';
 import { endpointsFor, GitHubClient } from '../core/github/client';
@@ -26,12 +26,12 @@ import { BLOCKER_LABEL, canForceRemove } from '../shared/labels';
 import type { AgentDraftInput, ReviewBridge } from '../core/agents/reviewBridge';
 import { claudePointerFile, readClaudePointer, writeClaudePointer } from '../core/store/claudePointer';
 import { findTool } from '../core/env';
-import { claudeModels } from './agents/claudeModels';
+import { claudeModels, knownContextWindow } from './agents/claudeModels';
 import { startMcpServer, type RunningMcpServer } from './mcpServer';
 import { McpTokenStore } from './mcpToken';
 import { claudePrompt, claudeSystemPrompt, sessionTitle, type LineContext } from '../shared/agents';
 import { claimSession, openElsewhere, sessionChangedAt, sessionMessages, takeFromTerminal } from './agents/claudeSessions';
-import { claudeBin, startClaude } from './agents/claudeProcess';
+import { claudeBin, claudeScratchDir, startClaude } from './agents/claudeProcess';
 import { openInClaude } from './agents/openClaude';
 import { PrClaude } from './agents/prClaude';
 
@@ -70,7 +70,7 @@ const errorMessage = (err: unknown) => (err instanceof Error ? err.message : Str
 /** Runs the claude CLI; resolves with its output, or rejects with what it printed. */
 function claude(args: string[]): Promise<string> {
   return new Promise((resolve, reject) =>
-    execFile(claudeBin(), args, { timeout: 30_000 }, (err, out, stderr) => (err ? reject(new Error(stderr.trim() || err.message)) : resolve(out))),
+    execFile(claudeBin(), args, { cwd: claudeScratchDir(), timeout: 30_000 }, (err, out, stderr) => (err ? reject(new Error(stderr.trim() || err.message)) : resolve(out))),
   );
 }
 
@@ -152,6 +152,25 @@ export class SessionRegistry implements ReviewBridge {
     return { code, threads: (thread?.comments ?? []).map((c) => ({ author: c.author, body: c.body })) };
   }
 
+  /**
+   * Switches a pull request between reading and editing. Claude Code ends with the old checkout (not while it's
+   * answering or has something running in the background): the next question starts it in the new one, with what it
+   * may do there. The conversation goes on wherever the pull request is checked out: a folder of your own, maybe.
+   */
+  private async switchCheckout(key: string, mode: CheckoutMode): Promise<void> {
+    const session = this.session(key);
+    const before = session.current?.worktree.path ?? null;
+    const claude = this.claude.get(key);
+    if (claude && !(await claude.release())) throw new Error('Claude is answering, or still has something running in the background. Switch when it’s done.');
+    const pointer = before ? await readClaudePointer(await claudePointerFile(before, key)).catch(() => null) : null;
+    await session.setCheckout(mode);
+    const after = session.current?.worktree.path ?? null;
+    if (pointer?.sessionId && after && after !== before) {
+      const file = await claudePointerFile(after, key);
+      if (!(await readClaudePointer(file)).sessionId) await writeClaudePointer(file, pointer);
+    }
+  }
+
   /** The PR's Claude, made when first needed: the PR must be loaded, since its session lives in the worktree. */
   private claudeFor(key: string): PrClaude {
     const existing = this.claude.get(key);
@@ -159,6 +178,7 @@ export class SessionRegistry implements ReviewBridge {
     const session = this.session(key);
     if (!session.current) throw new Error('The pull request is still loading.');
     const pointerFile = () => claudePointerFile(session.current?.worktree.path ?? '', key);
+    let wasAnswering = false;
     const claude: PrClaude = new PrClaude({
       prepare: async (request) => {
         const snap = session.current;
@@ -170,6 +190,7 @@ export class SessionRegistry implements ReviewBridge {
           title: sessionTitle(String(snap.ref.number), snap.details.title),
           prompt: claudePrompt(request, context),
           systemPrompt: claudeSystemPrompt(snap),
+          editing: snap.worktree.checkout === 'editing' && snap.worktree.branch !== null,
         };
       },
       worktree: () => session.current?.worktree.path ?? null,
@@ -181,8 +202,14 @@ export class SessionRegistry implements ReviewBridge {
       claim: (id) => claimSession(id),
       takeFromTerminal: (id) => takeFromTerminal(id),
       start: (options) => startClaude(options),
+      contextWindow: (model) => knownContextWindow(model),
       emit: (view) => {
-        if (this.claude.get(key) === claude) this.host.emit({ type: 'claude', key, view });
+        if (this.claude.get(key) !== claude) return;
+        this.host.emit({ type: 'claude', key, view });
+        // Claude may have committed or pushed while you contribute, which changes nothing the file watcher sees.
+        const answering = view.busy === 'app';
+        if (wasAnswering && !answering && session.current?.worktree.checkout === 'editing') void session.check().then(() => session.remapWorktree()).catch(() => undefined);
+        wasAnswering = answering;
       },
     });
     this.claude.set(key, claude);
@@ -200,7 +227,7 @@ export class SessionRegistry implements ReviewBridge {
     const claude = this.claudeFor(key);
     const sessionId = await claude.sessionId();
     if (!sessionId || (await sessionChangedAt(sessionId, snap.worktree.path)) === undefined) throw new Error('This pull request has no Claude session yet. Ask Claude something here first; that starts it.');
-    if (!(await claude.release())) throw new Error('Claude is answering a question from PR Review. Open the session when it’s done, or stop it.');
+    if (!(await claude.release())) throw new Error('Claude is answering a question from PR Review, or still has something running in the background. Open the session when it’s done, or stop it.');
     const title = sessionTitle(String(snap.ref.number), snap.details.title) ?? key;
     await openInClaude(app, { sessionId, worktree: snap.worktree.path, env: actionEnv(snap), name: `Claude · ${title}`, terminalApp: (await this.appState.settings()).terminalApp });
     void claude.refresh(true);
@@ -547,6 +574,16 @@ export class SessionRegistry implements ReviewBridge {
       setThreadPlacement: (key, threadId, line) => this.session(key).setThreadPlacement(threadId, line),
       listCommits: (key) => this.session(key).listCommits(),
       setCompare: (key, from, label) => this.session(key).setCompare(from, label),
+      checkoutPlan: (key, mode) => this.session(key).checkoutPlan(mode),
+      setCheckout: (key, mode) => this.switchCheckout(key, mode),
+      commitLocal: (key, message) => this.session(key).commitLocal(message),
+      pullLocal: (key) => this.session(key).pullLocal(),
+      pushLocal: (key) => this.session(key).pushLocal(),
+      discardLocal: async (key, paths) => {
+        const what = paths.length === 1 ? (paths[0]!.split('/').pop() ?? paths[0]!) : `${paths.length} files`;
+        const detail = 'Edited files go back to how they were at the last commit, and new files are deleted. You can’t undo this.';
+        if (await this.host.confirm(`Discard changes to ${what}?`, detail, 'Discard')) await this.session(key).discardLocal(paths);
+      },
       search: (query, after) => searchPrs(this.client('github.com'), 'github.com', query, after),
       filterSuggestions: async (repo, kind, query) => {
         const [owner, name] = repo.split('/');

@@ -22,6 +22,8 @@ export function fileMenuItems(snapshot: PrSnapshot, path: string, { whole = true
     'separator',
     { id: 'file:copy', label: 'Copy Path' },
     { id: 'file:copy-full', label: 'Copy Full Path' },
+    // Changed in the checkout and not committed: it can go back.
+    ...(snapshot.worktree.uncommitted.includes(path) ? ['separator' as const, { id: 'file:discard', label: 'Discard Changes…' }] : []),
     ...actionItems(snapshot, deleted),
   ];
 }
@@ -48,6 +50,7 @@ export async function runFileAction(snapshot: PrSnapshot, path: string, choice: 
     if (choice === 'file:finder') await api.showInFinder(snapshot.key, path);
     if (choice === 'file:copy') await navigator.clipboard.writeText(path);
     if (choice === 'file:copy-full') await navigator.clipboard.writeText(`${snapshot.worktree.path}/${path}`);
+    if (choice === 'file:discard') await api.discardLocal(snapshot.key, [path]);
     if (choice === 'file:github') {
       // A changed file: its place in the pull request's "Files changed"; any other file: as it is at the PR's head.
       await api.openExternal(

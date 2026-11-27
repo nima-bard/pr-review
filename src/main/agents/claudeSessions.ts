@@ -146,12 +146,19 @@ export async function openElsewhere(sessionId: string, dir = sessionsDir()): Pro
 /** The Agent SDK, loaded when first needed (it's large); only its readers of Claude Code's local session files are used. */
 const sdk = () => import('@anthropic-ai/claude-agent-sdk');
 
-/** When session `sessionId` last changed, or undefined when Claude Code doesn't have it (deleted, or cleaned up). */
+/**
+ * When session `sessionId` last changed, or undefined when Claude Code doesn't have it (deleted, or cleaned up). It's
+ * looked for with the folder `dir`, else in every project: a conversation goes on in another folder when the pull
+ * request is checked out somewhere else for editing, and Claude Code keeps it where it started.
+ */
 export async function sessionChangedAt(sessionId: string, dir: string): Promise<number | undefined> {
-  return (await (await sdk()).getSessionInfo(sessionId, { dir }))?.lastModified;
+  const { getSessionInfo } = await sdk();
+  return ((await getSessionInfo(sessionId, { dir })) ?? (await getSessionInfo(sessionId)))?.lastModified;
 }
 
-/** The session's messages, as the Agent SDK documents them (Claude Code's files themselves are internal). */
+/** The session's messages, as the Agent SDK documents them (Claude Code's files themselves are internal); found as above. */
 export async function sessionMessages(sessionId: string, dir: string): Promise<SessionLine[]> {
-  return (await (await sdk()).getSessionMessages(sessionId, { dir })) as SessionLine[];
+  const { getSessionMessages } = await sdk();
+  const here = (await getSessionMessages(sessionId, { dir })) as SessionLine[];
+  return here.length > 0 ? here : ((await getSessionMessages(sessionId)) as SessionLine[]);
 }

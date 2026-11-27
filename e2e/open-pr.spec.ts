@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createServer, type Server } from 'node:http';
@@ -48,6 +48,8 @@ function makeFixture(): Fixture {
   const v1 = commit(V1_FILE, 'discount');
   const v2 = commit(V2_FILE, 'clamp negatives');
   git(work, 'push', '-q', 'origin', `${v2}:refs/pull/1/head`);
+  // The pull request's branch on GitHub, for editing on it.
+  git(work, 'push', '-q', 'origin', `${v2}:refs/heads/feature`);
   git(work, 'checkout', '-q', 'main');
   git(work, 'branch', '-q', '-D', 'feature');
   return { root, base, v1, v2 };
@@ -99,6 +101,7 @@ function mockGitHub(fx: Fixture, received: { query: string; vars: Record<string,
     if (q.includes('headRefOid')) {
       return {
         repository: {
+          viewerPermission: 'WRITE',
           pullRequest: {
             id: 'PR_1', number: 1, title: 'Apply loyalty discount', url: 'https://github.com/acme/demo/pull/1', state: 'OPEN', isDraft: false,
             createdAt: '2026-11-01T09:00:00Z', updatedAt: '2026-11-02T09:00:00Z', body: 'Implements AB#4711.', bodyHTML: '<p>Implements AB#4711.</p>',
@@ -170,6 +173,27 @@ async function answer(prompt) {
     record('user', { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: 'Shown as buttons.' }] }] });
     record('assistant', { role: 'assistant', content: [{ type: 'text', text: '' }], stop_reason: 'end_turn' });
     out({ type: 'result', subtype: 'success', is_error: false, result: 'offered', session_id: sid });
+    return;
+  }
+  // Asked to look in the background, it starts an agent there and answers. The agent finishes once the test says so (a
+  // file appears); Claude then answers again in a turn of its own, as Claude Code does.
+  if (/Find the callers in the background/.test(prompt)) {
+    const agent = { description: 'Find the callers', subagent_type: 'Explore', run_in_background: true, prompt: '…' };
+    record('assistant', { role: 'assistant', content: [{ type: 'tool_use', id: 't3', name: 'Agent', input: agent }], stop_reason: 'tool_use' });
+    out({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'a1', task_type: 'local_agent', description: 'Find the callers' }] });
+    record('user', { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't3', content: [{ type: 'text', text: 'Async agent launched successfully.' }] }] });
+    record('assistant', { role: 'assistant', content: [{ type: 'text', text: 'An agent is looking.' }], stop_reason: 'end_turn' });
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'An agent is looking.', session_id: sid });
+    const signal = join(process.env.CLAUDE_CONFIG_DIR, 'finish-agent');
+    const timer = setInterval(() => {
+      if (!existsSync(signal)) return;
+      clearInterval(timer);
+      out({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'completed', output_file: '', summary: 'Agent "Find the callers" completed' });
+      out({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+      record('user', { role: 'user', content: '<task-notification>\\n<task-id>a1</task-id>\\n<status>completed</status>\\n<summary>Agent "Find the callers" completed</summary>\\n</task-notification>' });
+      record('assistant', { role: 'assistant', content: [{ type: 'text', text: 'Three places call it.' }], stop_reason: 'end_turn' });
+      out({ type: 'result', subtype: 'success', is_error: false, result: 'Three places call it.', session_id: sid });
+    }, 100);
     return;
   }
   const where = /add_draft \\(path "([^"]+)", line (\\d+)/.exec(prompt);
@@ -416,6 +440,24 @@ test('Claude offers a follow-up as buttons under its answer, and a choice sends 
   await expect(comments).toHaveAttribute('aria-pressed', 'false');
   await comments.click();
   await expect(win.getByRole('region', { name: 'Comments' })).toBeVisible();
+});
+
+test('an agent Claude starts in the background shows as running under its answer, and what Claude says once it’s done joins that answer', async () => {
+  const key = 'github.com/acme/demo#1';
+  await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.askClaude(k, { kind: 'prompt', prompt: 'Find the callers in the background', target: null }), key);
+  const claude = win.getByRole('navigation', { name: 'Side panels' }).getByRole('button', { name: 'Claude', exact: true });
+  if ((await claude.getAttribute('aria-pressed')) !== 'true') await claude.click();
+  const panel = win.getByRole('region', { name: 'Claude' });
+  const running = panel.getByRole('list', { name: 'Running in the background' });
+  await expect(running).toContainText('An agent is still running: Find the callers', { timeout: 20_000 });
+  await expect(panel.getByText('An agent is looking.')).toBeVisible();
+
+  writeFileSync(join(fx.root, 'claude', 'finish-agent'), '');
+  await expect(running).toHaveCount(0, { timeout: 15_000 });
+  await expect(panel.getByText('Three places call it.')).toBeVisible({ timeout: 15_000 });
+  // One answer: what Claude said once the agent was done is part of it, not a question of its own.
+  const last = (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.at(-1);
+  expect(last).toMatchObject({ request: { prompt: 'Find the callers in the background' }, reply: 'An agent is looking.\n\nThree places call it.', done: true });
 });
 
 test('Ask Claude on a review thread: the thread shows over the box, can be removed, and goes with the question', async () => {
@@ -679,6 +721,57 @@ test('the Overview has its details beside it, the files their comments and Claud
   // Settings at the foot of the left strip, no longer in the tab bar.
   await expect(left.getByRole('button', { name: 'Settings' })).toBeVisible();
   await expect(win.locator('div.drag').getByRole('button', { name: 'Settings' })).toHaveCount(0);
+});
+
+test('contributing on the branch: your edits show as they happen and under Local changes, and you commit and push them', async () => {
+  const checkout = win.getByRole('radiogroup', { name: 'Checkout' });
+  await expect(checkout.getByRole('radio', { name: 'Review' })).toHaveAttribute('aria-checked', 'true');
+  await expect(win.locator('footer')).toContainText('reviewing at');
+  // The switch explains first what changes: where the files are, that pushes no longer come in by themselves.
+  await checkout.getByRole('radio', { name: 'Contribute' }).click();
+  const explain = win.getByRole('dialog', { name: 'Contribute to this pull request?' });
+  await expect(explain).toContainText('Checks out feature in PR Review’s worktree');
+  await expect(explain).toContainText('Pull rebases your commits onto them');
+  await explain.getByRole('button', { name: 'Contribute' }).click();
+  await expect(explain).toHaveCount(0, { timeout: 20_000 });
+  const strip = win.getByRole('status', { name: 'Contributing' });
+  await expect(strip).toContainText('Contributing on feature', { timeout: 20_000 });
+  await expect(strip).toContainText('no uncommitted changes');
+  await expect(win.locator('footer')).toContainText('contributing on feature');
+
+  // An edit made outside PR Review, as in your editor, shows as it happens.
+  const calc = join(fx.root, 'source', 'demo.worktrees', 'pr-1', 'src', 'calc.ts');
+  appendFileSync(calc, '// clamp in the caller too\n');
+  await expect(strip).toContainText('1 uncommitted file', { timeout: 15_000 });
+  // All changes is the latest push: the file says it was edited, and leads to Local changes.
+  const section = win.locator('section[aria-label="src/calc.ts"]');
+  await section.getByRole('button', { name: 'Edited locally' }).click();
+  await expect(strip.getByRole('button', { name: 'Local changes' })).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 });
+  await expect(section.getByText('clamp in the caller too')).toBeVisible({ timeout: 15_000 });
+  // Another edit shows in the diff as it happens.
+  appendFileSync(calc, '// and once more\n');
+  await expect(section.getByText('and once more')).toBeVisible({ timeout: 15_000 });
+  // Back to reviewing waits for the edit to be committed or discarded.
+  await checkout.getByRole('radio', { name: 'Review' }).click();
+  const back = win.getByRole('dialog', { name: 'Back to reviewing?' });
+  await expect(back.getByRole('alert')).toContainText('1 file has uncommitted changes');
+  await expect(back.getByRole('button', { name: 'Back to reviewing' })).toBeDisabled();
+  await back.getByRole('button', { name: 'Cancel' }).click();
+
+  await strip.getByRole('button', { name: 'Commit…' }).click();
+  const dialog = win.getByRole('dialog', { name: 'Commit changes' });
+  await expect(dialog.getByRole('list', { name: 'Files to commit' })).toContainText('src/calc.ts');
+  await dialog.getByLabel('Message').fill('Clamp in the caller too');
+  await dialog.getByRole('button', { name: 'Commit and push' }).click();
+  await expect(dialog).toHaveCount(0, { timeout: 15_000 });
+  const pushed = execFileSync('git', ['--git-dir', join(fx.root, 'remote.git'), 'log', '-1', '--format=%s', 'feature'], { encoding: 'utf8' }).trim();
+  expect(pushed).toBe('Clamp in the caller too');
+
+  // Back to reviewing: PR Review's own worktree follows the pull request again; the commit stays on the branch.
+  await checkout.getByRole('radio', { name: 'Review' }).click();
+  await win.getByRole('dialog', { name: 'Back to reviewing?' }).getByRole('button', { name: 'Back to reviewing' }).click();
+  await expect(strip).toHaveCount(0, { timeout: 15_000 });
+  await expect(win.locator('footer')).toContainText('reviewing at');
 });
 
 test('a window reopened from the Dock shows the pull request that was open', async () => {

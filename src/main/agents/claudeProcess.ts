@@ -1,8 +1,23 @@
 import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import type { ClaudeBackgroundTask } from '../../shared/model';
 
 /** The Claude Code CLI: `claude` on the PATH, or PR_REVIEW_CLAUDE (automated runs use a stand-in). */
 export const claudeBin = (): string => process.env.PR_REVIEW_CLAUDE || 'claude';
+
+/**
+ * An empty folder to run `claude` in when it isn't about a pull request (listing models, registering the MCP server).
+ * Claude Code looks through the folder it starts in: started in your home folder it reaches into Documents, Desktop and
+ * cloud drives, and macOS asks you to let PR Review in, again with each version of the app.
+ */
+export function claudeScratchDir(): string {
+  const dir = join(tmpdir(), 'pr-review-claude');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 /** What Claude may use without asking: reading the code and the PR, and PR Review's tools (drafts, Viewed, showing). */
 export const CLAUDE_ALLOWED = [
@@ -33,6 +48,15 @@ export const CLAUDE_ALLOWED = [
  */
 export const CLAUDE_DENIED = ['Bash(gh api:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr review:*)', 'Edit', 'Write', 'NotebookEdit', 'AskUserQuestion'];
 
+/**
+ * While you contribute (the pull request checked out on its branch, `CheckoutMode`): changing files, and committing
+ * and pushing them, which Claude does only when you ask (its instructions say so).
+ */
+export const CLAUDE_EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git push:*)'];
+
+/** Never, even when contributing. Rules match a command's start, so these catch the usual spellings; the instructions do the rest. */
+const CLAUDE_EDIT_DENIED = ['Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push --force-with-lease:*)'];
+
 export interface ClaudeProcessOptions {
   sessionId: string;
   /** Starts the session (with `--session-id` and its name) instead of resuming it. */
@@ -47,12 +71,16 @@ export interface ClaudeProcessOptions {
   effort: string;
   /** How to work with PR Review, given once for the session's run rather than in every prompt (see `claudeSystemPrompt`). */
   systemPrompt: string;
+  /** The checkout is on the branch, for contributing: Claude may change files, and commit and push when asked. */
+  editing?: boolean;
   /** PR Review's MCP server, with the headers that say who calls it. */
   mcp: { url: string; headers: Record<string, string> };
   /** Claude started a turn (for a prompt the app sent, or one it had queued). */
   onTurn(): void;
   /** Claude finished a turn: null, or why it failed; and the model's context window, when Claude Code says. */
   onResult(error: string | null, contextWindow?: number): void;
+  /** What Claude has running in the background now, whenever that changes (empty when the last one ends). */
+  onBackground(tasks: ClaudeBackgroundTask[]): void;
 }
 
 export interface ClaudeProcess {
@@ -74,7 +102,7 @@ const STDERR_LIMIT = 4000;
  * The arguments for a long-running headless session: prompts arrive as stream-json lines on stdin (the Agent SDK's
  * `SDKUserMessage`), answers stream back as stream-json. No --bare: reviews need your skills, hooks and CLAUDE.md.
  */
-export function claudeArgs(o: Omit<ClaudeProcessOptions, 'onTurn' | 'onResult' | 'cwd' | 'env'>): string[] {
+export function claudeArgs(o: Omit<ClaudeProcessOptions, 'onTurn' | 'onResult' | 'onBackground' | 'cwd' | 'env'>): string[] {
   return [
     '-p',
     '--input-format',
@@ -88,15 +116,20 @@ export function claudeArgs(o: Omit<ClaudeProcessOptions, 'onTurn' | 'onResult' |
     '--permission-mode',
     'dontAsk',
     '--allowedTools',
-    CLAUDE_ALLOWED.join(','),
+    (o.editing ? [...CLAUDE_ALLOWED, ...CLAUDE_EDIT_TOOLS] : CLAUDE_ALLOWED).join(','),
     '--disallowedTools',
-    CLAUDE_DENIED.join(','),
+    (o.editing ? [...CLAUDE_DENIED.filter((t) => !CLAUDE_EDIT_TOOLS.includes(t)), ...CLAUDE_EDIT_DENIED] : CLAUDE_DENIED).join(','),
     ...(o.model ? ['--model', o.model] : []),
     ...(o.effort ? ['--effort', o.effort] : []),
     '--append-system-prompt',
     o.systemPrompt,
   ];
 }
+
+/** A background task as Claude Code lists it in `background_tasks_changed`. */
+type ListedTask = { task_id: string; task_type?: string; description?: string; parent_task_id?: string; ambient?: boolean };
+
+const KINDS: Record<string, ClaudeBackgroundTask['kind']> = { local_agent: 'agent', local_bash: 'command' };
 
 /** One prompt as a stream-json input line. */
 export const promptLine = (sessionId: string, prompt: string): string =>
@@ -109,14 +142,35 @@ export const promptLine = (sessionId: string, prompt: string): string =>
 export function startClaude(o: ClaudeProcessOptions): ClaudeProcess {
   const child = spawn(claudeBin(), claudeArgs(o), { cwd: o.cwd, env: { ...process.env, ...o.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = '';
+  // Background tasks a subagent started: their end goes to that subagent, not to a turn of the conversation.
+  const nested = new Set<string>();
   createInterface({ input: child.stdout }).on('line', (line) => {
-    let msg: { type?: string; subtype?: string; is_error?: boolean; result?: string; errors?: string[]; modelUsage?: Record<string, { contextWindow?: unknown }> };
+    let msg: {
+      type?: string;
+      subtype?: string;
+      is_error?: boolean;
+      result?: string;
+      errors?: string[];
+      modelUsage?: Record<string, { contextWindow?: unknown }>;
+      tasks?: ListedTask[];
+      task_id?: string;
+      status?: string;
+    };
     try {
       msg = JSON.parse(line) as typeof msg;
     } catch {
       return;
     }
     if (msg.type === 'system' && msg.subtype === 'init') o.onTurn();
+    // The whole set each time it changes (Claude Code's level signal); ambient ones are watchers, not work.
+    if (msg.type === 'system' && msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
+      for (const t of msg.tasks) if (t.parent_task_id) nested.add(t.task_id);
+      o.onBackground(
+        msg.tasks.filter((t) => !t.ambient).map((t) => ({ id: t.task_id, description: t.description ?? '', kind: KINDS[t.task_type ?? ''] ?? 'other' })),
+      );
+    }
+    // Claude answers a task of its own that finished, in a turn it starts itself, without a prompt (or an init) from us.
+    if (msg.type === 'system' && msg.subtype === 'task_notification' && (msg.status === 'completed' || msg.status === 'failed') && !nested.has(msg.task_id ?? '')) o.onTurn();
     if (msg.type !== 'result') return;
     const failed = msg.is_error === true || (msg.subtype !== undefined && msg.subtype !== 'success');
     const windows = Object.values(msg.modelUsage ?? {}).flatMap((u) => (typeof u.contextWindow === 'number' ? [u.contextWindow] : []));

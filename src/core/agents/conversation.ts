@@ -25,6 +25,19 @@ type Block = { type?: string; text?: unknown; content?: unknown; name?: unknown;
  */
 const COMMAND = /^(?:<[a-z][\w-]*>|\[Request interrupted by user)/;
 
+/**
+ * Claude Code's note that something Claude started in the background (a subagent, a shell command) has ended, which it
+ * puts in the session as a prompt and Claude answers. Its summary, for the exchange's list of what Claude did.
+ */
+function finishedInBackground(text: string): string | null {
+  if (!text.startsWith('<task-notification>')) return null;
+  const tag = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim() ?? '';
+  const summary = tag('summary');
+  if (summary) return summary;
+  const status = tag('status');
+  return status === 'failed' ? 'Something running in the background failed' : status === 'killed' || status === 'stopped' ? 'Something running in the background was stopped' : 'Something running in the background finished';
+}
+
 /** The text of a prompt, or null for the other user messages (tool results). An image-only prompt has empty text. */
 function promptText(message: unknown): string | null {
   const content = (message as { content?: unknown } | null)?.content;
@@ -86,13 +99,30 @@ export function contextTokens(lines: readonly SessionLine[]): number | null {
 /**
  * The conversation in a PR's Claude session: each prompt and Claude's answer. Prompts PR Review sent carry a header
  * (see `readPrompt`) that gives back what they were about; the others were typed in Claude Desktop or Claude Code.
+ * What Claude says once something it started in the background has finished belongs to the answer that started it.
  */
 export function buildConversation(lines: readonly SessionLine[]): Exchange[] {
   const exchanges: Exchange[] = [];
-  let current: { exchange: Exchange; state: ClaudeStreamState } | null = null;
+  const states = new Map<Exchange, ClaudeStreamState>();
+  type Current = { exchange: Exchange; state: ClaudeStreamState };
+  let current: Current | null = null;
   for (const line of lines) {
     if (line.parent_tool_use_id) continue;
     const text = line.type === 'user' ? promptText(line.message) : null;
+    const finished = text !== null ? finishedInBackground(text) : null;
+    if (finished !== null) {
+      // Claude answers it next, as more of the latest answer: not done until that turn ends.
+      const ongoing = current as Current | null;
+      const exchange = ongoing?.exchange ?? exchanges.at(-1);
+      if (exchange) {
+        const state = ongoing?.state ?? states.get(exchange) ?? EMPTY_STREAM;
+        current = { exchange, state: { ...state, activity: [...state.activity, finished] } };
+        exchange.activity = current.state.activity;
+        exchange.done = false;
+        states.set(exchange, current.state);
+      }
+      continue;
+    }
     if (text !== null) {
       // A question queued while Claude answered the one before goes into the same turn, so that one has no end of its
       // own: it was answered all the same.
@@ -120,6 +150,7 @@ export function buildConversation(lines: readonly SessionLine[]): Exchange[] {
     const { exchange } = current;
     if (line.type === 'assistant' && line.timestamp) exchange.endedAt = line.timestamp;
     current.state = foldClaudeMessage(current.state, line);
+    states.set(exchange, current.state);
     exchange.reply = current.state.reply;
     exchange.activity = current.state.activity;
     if (line.type === 'user') for (const id of addedDrafts(line.message)) if (!exchange.draftIds.includes(id)) exchange.draftIds.push(id);

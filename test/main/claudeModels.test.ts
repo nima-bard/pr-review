@@ -13,6 +13,25 @@ describe('toClaudeModels', () => {
     ]);
   });
 
+  it('gives each model the context window Claude Code said for it', () => {
+    const models = toClaudeModels(
+      [
+        { value: 'default', displayName: 'Default (recommended)', description: 'Opus 5.5' },
+        { value: 'claude-opus-4-6', displayName: 'Opus 4.6', description: 'Older' },
+        { value: 'haiku', displayName: 'Haiku 5.5', description: 'Fastest' },
+      ],
+      new Map([
+        ['default', 1_000_000],
+        ['claude-opus-4-6', 200_000],
+      ]),
+    );
+    expect(models.map((m) => [m.value, m.contextWindow])).toEqual([
+      ['', 1_000_000],
+      ['claude-opus-4-6', 200_000],
+      ['haiku', undefined],
+    ]);
+  });
+
   it('stands in with Opus 5.5, Fable 5.2 and Haiku 5.5 and the standard effort levels when the list can’t be read', () => {
     expect(STANDARD_MODELS.map((m) => m.value)).toEqual(['', 'claude-opus-5-5', 'claude-fable-5-2', 'claude-haiku-5-5']);
     expect(STANDARD_MODELS[1]?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);

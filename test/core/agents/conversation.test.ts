@@ -51,6 +51,46 @@ describe('buildConversation', () => {
     expect(conversation.map((e) => [e.request.prompt, e.reply])).toEqual([['Review it', 'Two findings.']]);
   });
 
+  it('adds what Claude says once its background agent has finished to the answer that started it, not done until then', () => {
+    const notification = [
+      '<task-notification>',
+      '<task-id>a1</task-id>',
+      '<tool-use-id>t1</tool-use-id>',
+      '<status>completed</status>',
+      '<summary>Agent "Find the callers" completed</summary>',
+      '<result>Three callers.</result>',
+      '</task-notification>',
+    ].join('\n');
+    const started = [
+      user(fromApp('PR Review · request', 'Who calls getPermission?')),
+      tool('t1', 'Agent', { description: 'Find the callers', subagent_type: 'Explore', run_in_background: 'true', prompt: '…' }),
+      result('t1', 'Async agent launched successfully.'),
+      say('An agent is looking; I’ll say when it’s done.', 'end_turn'),
+    ];
+    const [waiting] = buildConversation(started);
+    expect(waiting).toMatchObject({ done: true, activity: ['Started an agent in the background: Find the callers'] });
+
+    const back = buildConversation([...started, user(notification)]);
+    expect(back).toHaveLength(1);
+    expect(back[0]).toMatchObject({ done: false, activity: ['Started an agent in the background: Find the callers', 'Agent "Find the callers" completed'] });
+
+    const answered = buildConversation([...started, user(notification), say('Three places call it: …', 'end_turn')]);
+    expect(answered).toHaveLength(1);
+    expect(answered[0]).toMatchObject({ done: true, reply: 'An agent is looking; I’ll say when it’s done.\n\nThree places call it: …' });
+  });
+
+  it('describes a command run in the background, and one that finished without a summary', () => {
+    const [ex] = buildConversation([
+      user('Run the tests'),
+      tool('t1', 'Bash', { command: 'npm test', run_in_background: true }),
+      result('t1', 'Command running in background with ID: b1.'),
+      say('Started.', 'end_turn'),
+      user('<task-notification>\n<task-id>b1</task-id>\n<status>failed</status>\n</task-notification>'),
+      say('They failed.', 'end_turn'),
+    ]);
+    expect(ex).toMatchObject({ activity: ['Started in the background: npm test', 'Something running in the background failed'], reply: 'Started.\n\nThey failed.', done: true });
+  });
+
   it('reads the choices Claude offered at the end of its answer, and leaves the call out of what it did', () => {
     const offer = { question: 'Leave a comment about the five missing processors?', choices: [{ label: 'Yes, leave a comment', prompt: 'Yes, write that comment.' }, { label: 'No', prompt: null }] };
     const [ex] = buildConversation([user('Is the list complete?'), say('No: five are missing.'), tool('t9', 'mcp__pr-review__offer_choices', offer), result('t9', 'PR Review shows these as buttons…'), say('', 'end_turn')]);

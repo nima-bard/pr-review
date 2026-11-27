@@ -32,6 +32,8 @@ import {
   type ViewedState,
   type CodeSearchQuery,
   type CodeSearchResult,
+  type CheckoutMode,
+  LOCAL_CHANGES,
 } from '../shared/model';
 import { filterPaths, searchWorktree } from '../core/search/codeSearch';
 import { triage } from '../shared/triage';
@@ -71,7 +73,8 @@ import {
   worktreeHunks,
   type ChangedFile,
 } from '../core/git/diff';
-import { git } from '../core/git/exec';
+import { gh, git } from '../core/git/exec';
+import { aheadBehind, attachBranch, commitAll, currentBranch, detachAt, discard, localChanges, localPatch, pullOnto, pushBranch, uncommitted } from '../core/git/checkout';
 import { appendVersion, buildChain, commitsBetween, mergeVersions, pinVersion, rangeDiffSummary } from '../core/git/versions';
 import {
   canonicalPath,
@@ -83,6 +86,7 @@ import {
   legacyWorktreePath,
   ownedWorktreePath,
   planWorktree,
+  type WorktreePlan,
 } from '../core/git/worktrees';
 import type { GitHubClient } from '../core/github/client';
 import { fetchConversation, fetchDetails, fetchThreads, fetchViewedStates, fetchViewerReviews } from '../core/github/pr';
@@ -112,7 +116,16 @@ interface WorktreeState {
   owned: boolean;
 }
 
-/** How often an author's worktree is checked for edits when it can't be watched. */
+/**
+ * Whether you can push to the pull request's branch: with write access to its repository, or for a fork, when it's
+ * yours or it lets maintainers edit (and you are one).
+ */
+function canPushTo(details: PrDetails, viewer: string): boolean {
+  if (!details.isCrossRepository) return details.viewerCan.merge;
+  return details.headRepoOwner?.toLowerCase() === viewer.toLowerCase() || (details.maintainerCanModify && details.viewerCan.merge);
+}
+
+/** How often a checkout being edited is checked for changes when it can't be watched. */
 const WORKTREE_POLL_MS = 5000;
 
 export class PrSession {
@@ -136,6 +149,8 @@ export class PrSession {
   private readonly aiCache = new Map<string, { line: number; confidence: number } | null>();
   private headBlobs = new Map<string, string>();
   private compareFrom: { from: string; label: string } | null = null;
+  /** Read only (the app's own worktree follows each push) or editing (on the branch); set on the first load. */
+  private checkout: CheckoutMode | null = null;
   private refreshing: Promise<void> | null = null;
   private anchorConfig: AnchorConfig = DEFAULT_ANCHOR_CONFIG;
 
@@ -157,7 +172,7 @@ export class PrSession {
     this.remote = (await remoteNameFor(this.deps.clonePath, this.ref.owner, this.ref.repo)) ?? 'origin';
     await this.refresh();
     this.startPolling();
-    if (this.snapshot?.role === 'author') this.startWatching();
+    if (this.checkout === 'editing') this.startWatching();
   }
 
   /** Checks GitHub every 45s (see `check`). */
@@ -183,11 +198,13 @@ export class PrSession {
         return;
       }
     }
+    // Commits and pushes made outside the app (in a terminal) change nothing the file watcher sees.
+    if (this.checkout === 'editing') await this.remapWorktree().catch(() => undefined);
     this.deps.emit({ type: 'checked', at: new Date().toISOString() });
   }
 
   /**
-   * Author mode: threads follow uncommitted edits in the author's checkout. A watcher can fail, at the start or later
+   * While editing: threads follow uncommitted edits in the checkout, and what changed there shows as it happens. A watcher can fail, at the start or later
    * (macOS gives an app started from a terminal 256 open files, and a big checkout can use them up): then the
    * worktree is checked every few seconds instead, rather than the error taking down the app.
    */
@@ -212,20 +229,137 @@ export class PrSession {
     }
   }
 
+  private stopWatching(): void {
+    if (this.watchTimer) clearTimeout(this.watchTimer);
+    if (this.worktreePoll) clearInterval(this.worktreePoll);
+    this.watcher?.close();
+    this.watcher = null;
+    this.watchTimer = null;
+    this.worktreePoll = null;
+  }
+
+  /**
+   * After the checkout changed (an edit, a commit, a discard): where it stands now, the Local changes list when it
+   * shows, and while editing, the threads placed in the edited files.
+   */
   async remapWorktree(): Promise<void> {
     const snap = this.snapshot;
-    if (!snap || snap.role !== 'author' || !this.worktree) return;
-    const dirty = new Set(await dirtyFiles(this.worktree.path).catch(() => []));
-    const threads: ThreadView[] = [];
-    for (const t of snap.threads) {
-      const base = this.headAnchors.get(t.id);
-      let anchor = base ?? t.anchor;
-      if (base && dirty.has(base.path) && base.line !== undefined && t.side === 'RIGHT') anchor = await this.composeWorktree(base, snap.details.headRefOid);
-      threads.push({ ...t, anchor, triage: triage({ isResolved: t.isResolved, comments: t.comments, anchor, viewerIsAuthor: true }) });
+    if (!snap || !this.worktree) return;
+    let threads: ThreadView[] | null = null;
+    if (this.checkout === 'editing') {
+      const dirty = new Set(await dirtyFiles(this.worktree.path).catch(() => []));
+      threads = [];
+      for (const t of snap.threads) {
+        const base = this.headAnchors.get(t.id);
+        let anchor = base ?? t.anchor;
+        if (base && dirty.has(base.path) && base.line !== undefined && t.side === 'RIGHT') anchor = await this.composeWorktree(base, snap.details.headRefOid);
+        threads.push({ ...t, anchor, triage: triage({ isResolved: t.isResolved, comments: t.comments, anchor, viewerIsAuthor: snap.role === 'author' }) });
+      }
     }
+    const local = await this.localState(snap.details);
+    const files = this.compareFrom?.from === LOCAL_CHANGES ? await this.fileEntries(snap.details.headRefOid) : null;
     this.update((s) => {
-      s.threads = threads;
+      if (threads) s.threads = threads;
+      s.worktree = { ...s.worktree, ...local };
+      if (files) s.files = files;
     });
+  }
+
+  /** Where the checkout stands: its branch, files changed and not committed, and on a branch, commits to push and to pull. */
+  private async localState(details: PrDetails): Promise<Pick<PrSnapshot['worktree'], 'branch' | 'uncommitted' | 'sync' | 'canPush' | 'checkedAt'>> {
+    const path = this.worktree?.path;
+    const push = canPushTo(details, this.deps.viewer);
+    const checkedAt = Date.now();
+    if (!path) return { branch: null, uncommitted: [], sync: null, canPush: push, checkedAt };
+    const [branch, changed] = await Promise.all([currentBranch(path).catch(() => null), uncommitted(path).catch(() => [])]);
+    const sync = branch ? await aheadBehind(path, details.headRefOid).catch(() => null) : null;
+    return { branch, uncommitted: changed, sync, canPush: push, checkedAt };
+  }
+
+  /**
+   * Switches between reading (the app's own worktree, following each push) and editing (on the pull request's branch,
+   * yours if you have it checked out). Leaving the branch needs its changes committed or discarded; its commits stay.
+   */
+  async setCheckout(mode: CheckoutMode): Promise<void> {
+    if (this.refreshing) await this.refreshing.catch(() => undefined);
+    const snap = this.snapshot;
+    if (!snap) throw new Error('The pull request is still loading.');
+    if (mode === this.checkout) return;
+    const before = this.checkout;
+    this.checkout = mode;
+    try {
+      this.progress(mode === 'editing' ? 'Switching to the branch…' : 'Switching back to reviewing…');
+      this.worktree = await this.prepareWorktree(snap.details, true);
+    } catch (err) {
+      this.checkout = before;
+      throw err;
+    }
+    await this.deps.appState.saveCheckoutMode(this.key, mode);
+    if (mode === 'reading' && this.compareFrom?.from === LOCAL_CHANGES) this.compareFrom = null;
+    this.stopWatching();
+    if (mode === 'editing') this.startWatching();
+    await this.refresh();
+  }
+
+  /** Where the pull request goes for `checkout` (see `planWorktree`); nothing changes yet. */
+  private async planFor(details: PrDetails, checkout: CheckoutMode): Promise<WorktreePlan> {
+    const { clonePath, appState } = this.deps;
+    const settings = await appState.settings();
+    const legacy = legacyWorktreePath(this.ref.number, settings.worktreeRoot);
+    return planWorktree({
+      worktrees: await listWorktrees(clonePath),
+      ownedPath: canonicalPath(ownedWorktreePath(clonePath, this.ref, settings.worktreeRoot)),
+      legacyPath: legacy ? canonicalPath(legacy) : null,
+      headRefName: details.headRefName,
+      headOid: details.headRefOid,
+      checkout,
+    });
+  }
+
+  /** Where switching to `mode` would check the pull request out, and whether that's a checkout of yours: said before switching. */
+  async checkoutPlan(mode: CheckoutMode): Promise<{ path: string; yours: boolean }> {
+    const snap = this.snapshot;
+    if (!snap) throw new Error('The pull request is still loading.');
+    const plan = await this.planFor(snap.details, mode);
+    return { path: plan.path, yours: plan.kind === 'reuse' && !plan.owned };
+  }
+
+  /** The checkout while editing on the branch; anything else is refused. */
+  private editingPath(): string {
+    if (this.checkout !== 'editing' || !this.worktree || this.worktree.mode !== 'branch') throw new Error('Switch to Contribute first.');
+    return this.worktree.path;
+  }
+
+  /** Commits every change in the checkout (new files too) while editing. */
+  async commitLocal(message: string): Promise<void> {
+    await commitAll(this.editingPath(), message);
+    await this.remapWorktree();
+  }
+
+  /** Brings in what was pushed since, under your own commits (see `pullOnto`). */
+  async pullLocal(): Promise<void> {
+    const path = this.editingPath();
+    await this.refresh();
+    const head = this.snapshot?.details.headRefOid;
+    if (!head) return;
+    await pullOnto(path, head);
+    await this.remapWorktree();
+  }
+
+  /** Pushes your commits to the pull request's branch; never forced. */
+  async pushLocal(): Promise<void> {
+    const snap = this.snapshot;
+    const path = this.editingPath();
+    if (!snap || !canPushTo(snap.details, this.deps.viewer)) throw new Error('You can’t push to this pull request’s branch.');
+    await pushBranch(path, { remote: this.remote, branch: snap.details.headRefName });
+    await this.refresh();
+  }
+
+  /** Throws away changes not committed to `paths`: edits go back, new files are deleted. */
+  async discardLocal(paths: string[]): Promise<void> {
+    if (!this.worktree) throw new Error('The pull request isn’t checked out yet.');
+    await discard(this.worktree.path, paths);
+    await this.remapWorktree();
   }
 
   refresh(): Promise<void> {
@@ -265,9 +399,10 @@ export class PrSession {
     await this.ensureCommit(details.baseRefOid);
     await this.ensureCommit(details.headRefOid);
 
+    this.checkout ??= (await this.deps.appState.checkoutMode(this.key)) ?? (role === 'author' ? 'editing' : 'reading');
     if (!this.worktree || this.snapshot?.details.headRefOid !== details.headRefOid) {
       this.progress('Preparing worktree…');
-      this.worktree = await this.prepareWorktree(details, role);
+      this.worktree = await this.prepareWorktree(details);
     }
 
     const [viewedStates, threadNodes, conversation, viewerReviews] = await fromGitHub;
@@ -299,6 +434,8 @@ export class PrSession {
         mode: this.worktree?.mode ?? 'detached',
         owned: this.worktree?.owned ?? false,
         behind: headAtCheckout !== null && headAtCheckout !== details.headRefOid,
+        checkout: this.checkout,
+        ...(await this.localState(details)),
       },
       mergeBase: base,
       files,
@@ -319,8 +456,10 @@ export class PrSession {
   /** The file list for the current comparison (all changes, or since an earlier version), with viewed states. */
   private async fileEntries(head: string): Promise<FileEntry[]> {
     const { clonePath } = this.deps;
-    if (this.compareFrom && !(await hasCommit(clonePath, this.compareFrom.from))) this.compareFrom = null;
-    this.files = this.compareFrom ? await this.filesSince(this.compareFrom.from, head) : this.prFiles;
+    const local = this.compareFrom?.from === LOCAL_CHANGES;
+    if (this.compareFrom && !local && !(await hasCommit(clonePath, this.compareFrom.from))) this.compareFrom = null;
+    if (local) this.files = this.worktree ? await localChanges(this.worktree.path, head) : [];
+    else this.files = this.compareFrom ? await this.filesSince(this.compareFrom.from, head) : this.prFiles;
     const paths = this.files.map((f) => f.path);
     const generated = await generatedFiles(clonePath, head, paths);
     const headBlobs = await blobShas(clonePath, head, paths).catch(() => new Map<string, string>());
@@ -485,19 +624,13 @@ export class PrSession {
     }
   }
 
-  private async prepareWorktree(details: PrDetails, role: Role): Promise<WorktreeState> {
+  /**
+   * Checks the pull request out as the checkout state says (see `planWorktree`). `switching`: the user asked for the
+   * change, so a refusal (changes not committed, leaving the branch) is theirs to see; on a refresh the checkout stays.
+   */
+  private async prepareWorktree(details: PrDetails, switching = false): Promise<WorktreeState> {
     const { clonePath, appState } = this.deps;
-    const settings = await appState.settings();
-    const ownedPath = canonicalPath(ownedWorktreePath(clonePath, this.ref, settings.worktreeRoot));
-    const legacy = legacyWorktreePath(this.ref.number, settings.worktreeRoot);
-    const plan = planWorktree({
-      worktrees: await listWorktrees(clonePath),
-      ownedPath,
-      legacyPath: legacy ? canonicalPath(legacy) : null,
-      headRefName: details.headRefName,
-      headOid: details.headRefOid,
-      role,
-    });
+    const plan = await this.planFor(details, this.checkout ?? 'reading');
     if (plan.kind === 'create-detached') {
       await createDetached(clonePath, plan.path, details.headRefOid);
       await appState.addOwnedWorktree(plan.path);
@@ -507,6 +640,21 @@ export class PrSession {
       await createBranchWorktree(clonePath, this.ref.number, plan.path);
       await appState.addOwnedWorktree(plan.path);
       return { path: plan.path, mode: 'branch', owned: true };
+    }
+    if (plan.kind === 'attach') {
+      // A fork's branch needs its remote set up for pulling and pushing, which the GitHub CLI does.
+      if (details.isCrossRepository) await gh(plan.path, ['pr', 'checkout', String(this.ref.number)]);
+      else await attachBranch(plan.path, this.remote, details.headRefName);
+      return { path: plan.path, mode: 'branch', owned: true };
+    }
+    if (plan.kind === 'detach') {
+      try {
+        await detachAt(plan.path, details.headRefOid);
+        return { path: plan.path, mode: 'detached', owned: true };
+      } catch (err) {
+        if (switching) throw err;
+        return { path: plan.path, mode: 'branch', owned: true };
+      }
     }
     if (plan.mayMove) await moveOwnedDetached(plan.path, details.headRefOid);
     return { path: plan.path, mode: plan.mode, owned: plan.owned };
@@ -595,7 +743,7 @@ export class PrSession {
   }
 
   private async anchorThreads(nodes: ReviewThreadNode[], details: PrDetails, base: string, versions: Version[], role: Role, io: ReturnType<typeof createGitTrackIO>): Promise<ThreadView[]> {
-    const dirty = role === 'author' && this.worktree ? new Set(await dirtyFiles(this.worktree.path).catch(() => [])) : new Set<string>();
+    const dirty = this.checkout === 'editing' && this.worktree ? new Set(await dirtyFiles(this.worktree.path).catch(() => [])) : new Set<string>();
     const times = new Map<string, string | null>();
     const placements = await this.deps.appState.placements(this.key);
     const result: ThreadView[] = [];
@@ -717,6 +865,13 @@ export class PrSession {
 
   async getFileDiff(path: string): Promise<FileDiffModel | null> {
     const snap = this.snapshot;
+    if (snap && this.worktree && this.compareFrom?.from === LOCAL_CHANGES) {
+      // Local changes aren't on GitHub: nothing to comment on.
+      const local = this.files.find((f) => f.path === path);
+      if (!local) return null;
+      const patch = await localPatch(this.worktree.path, snap.details.headRefOid, local.path, local.oldPath);
+      return { path: local.path, oldPath: local.oldPath ?? local.path, change: local.change, patch, binary: local.binary, commentable: { LEFT: [], RIGHT: [] } };
+    }
     const file = this.prFiles.find((f) => f.path === path);
     if (!snap || !file) return null;
     const prPatch = await filePatch(this.deps.clonePath, snap.details.baseRefOid, snap.details.headRefOid, file.path, file.oldPath);
@@ -1023,11 +1178,11 @@ export class PrSession {
     await this.refresh();
   }
 
-  /** Author mode: writes the last ```suggestion block of a thread into the working tree file. */
+  /** While editing: writes the last ```suggestion block of a thread into the file in the checkout. */
   async applySuggestion(threadId: string): Promise<void> {
     const snap = this.snapshot;
     const thread = snap?.threads.find((t) => t.id === threadId);
-    if (!snap || !thread || !this.worktree || snap.role !== 'author') throw new Error('Suggestions can only be applied to your own PR checkout.');
+    if (!snap || !thread || !this.worktree || this.checkout !== 'editing') throw new Error('Suggestions can only be applied while you contribute on the branch.');
     if (thread.anchor.line === undefined) throw new Error('The commented lines could not be located in the current code.');
     const body = [...thread.comments].reverse().find((c) => /```suggestion/.test(c.body))?.body;
     const match = body ? /```suggestion[^\n]*\n([\s\S]*?)```/.exec(body) : null;
@@ -1049,9 +1204,7 @@ export class PrSession {
 
   dispose(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
-    if (this.watchTimer) clearTimeout(this.watchTimer);
-    if (this.worktreePoll) clearInterval(this.worktreePoll);
-    this.watcher?.close();
+    this.stopWatching();
     this.blobs.dispose();
   }
 }

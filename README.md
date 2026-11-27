@@ -12,6 +12,7 @@ PR Review opens each pull request in a git worktree of a clone you already have,
 - **Comments that follow the code.** When the pull request changes (lines move, files are edited, renamed or split), threads are placed again in the current code, with a confidence label when they had to be found by their content.
 - **Review what's new.** One click shows only what changed since your last review, or since any push or commit.
 - **Drafts stay local** until you submit them as one review: comment, approve or request changes.
+- **Review, or contribute.** Review uses PR Review’s own worktree, detached at the latest push and updated with every push. Switch to Contribute (in the header) to check out the pull request’s branch: edit files in your editor or ask Claude, see uncommitted changes and unpushed commits under Local changes, and commit, pull and push from the app. Your own pull requests start there.
 - **Find in files** (⇧⌘F), like VS Code: match case, whole word, regular expressions, files to include or exclude, results as a list or a tree.
 - **Triage.** See which threads wait for your reply and which look addressed by later changes.
 - **Act on it.** Merge with GitHub's rules and proposed commit message, request reviewers, close or reopen, switch between draft and ready.
@@ -58,6 +59,7 @@ Claude is off until you turn it on in Settings › Claude (Claude Code must be i
 - The button at the top of the Claude panel opens the session in **Claude Desktop** or **Claude Code** (in your terminal). What you ask there shows in the app too.
 - Claude knows what you're looking at: lines or a word you select, the review thread you click into, or the file open in its own tab. It shows under the box, where × drops it.
 - Claude answers questions; it adds a review comment only when you ask for one, and may suggest one as a button under its answer. It can also mark files as viewed and show you files, lines and search results in the app.
+- Claude changes files only while you contribute (the switch in the header), and commits or pushes only when you ask it to. While you review, it suggests a change as a review comment instead.
 
 ## Privacy
 

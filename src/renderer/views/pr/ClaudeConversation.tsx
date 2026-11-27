@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { asks as allAsks, CLAUDE_APPS, columns, effortMenuItems, hasEfforts, modelChoice, modelLabel, modelMenuItems, requestLabel, type Ask } from '../../../shared/agents';
 import type { ContextMenuItem } from '../../../shared/ipc';
-import type { AgentRequest, ClaudeModel, ClaudeView, Exchange, LineTarget, PendingRequest, PrSnapshot, TextSelection, ThreadView } from '../../../shared/model';
+import type { AgentRequest, ClaudeBackgroundTask, ClaudeModel, ClaudeView, Exchange, LineTarget, PendingRequest, PrSnapshot, TextSelection, ThreadView } from '../../../shared/model';
 import { markdownPreview } from '../../../shared/markdownPreview';
 import { api, errorText } from '../../api';
 import { Badge, Button, cx, ErrorBox, Icon, MarkdownText, Spinner } from '../../components/ui';
 import { ASK_STATUS } from '../../diff/AskCard';
 import { askClaude, loadClaudeModels, useClaudeSettings } from '../../state/claude';
-import { useClaudeView } from '../../state/sessions';
+import { useClaudeView, useSnapshot } from '../../state/sessions';
+import { Octicon } from '../../components/octicons';
 import { focusFile, openFileTab, updateUi, usePrUi } from '../../state/ui';
 import { setViewContext, useViewContext } from '../../state/viewContext';
 
@@ -161,8 +162,9 @@ function ExchangeView({ snapshot, view, exchange, ask, highlighted, shown }: { s
   const comments = snapshot.drafts.filter((d) => exchange.draftIds.includes(d.id));
   // Comments it added that you haven't edited (an edited one is yours, and "Delete them" leaves it).
   const untouched = comments.filter((d) => d.origin !== undefined);
+  const latest = view.exchanges.at(-1)?.id === exchange.id;
   // Its offer stands until it's answered: by a choice, by anything asked since, or by "No".
-  const offering = exchange.offer !== null && exchange.done && view.exchanges.at(-1)?.id === exchange.id && view.pending.length === 0 && !view.dismissedOffers.includes(exchange.id);
+  const offering = exchange.offer !== null && exchange.done && latest && view.pending.length === 0 && !view.dismissedOffers.includes(exchange.id);
   return (
     <div id={`conversation-${ask.id}`} className="flex flex-col gap-4">
       <YourMessage
@@ -228,6 +230,7 @@ function ExchangeView({ snapshot, view, exchange, ask, highlighted, shown }: { s
             )}
           </span>
         )}
+        {latest && view.background.length > 0 && <BackgroundTasks tasks={view.background} />}
         {offering && <OfferChoices snapshot={snapshot} exchange={exchange} keys={shown} />}
         <span className="flex items-center gap-2 text-[11.5px] text-muted">
           {live && <Spinner />}
@@ -243,6 +246,25 @@ function ExchangeView({ snapshot, view, exchange, ask, highlighted, shown }: { s
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * What Claude started in the background (a subagent, a command) and is still running, under the latest answer: when one
+ * finishes, Claude picks its result up and answers again there.
+ */
+function BackgroundTasks({ tasks }: { tasks: ClaudeBackgroundTask[] }) {
+  const what = { agent: 'An agent', command: 'A command', other: 'A task' } as const;
+  return (
+    <ul aria-label="Running in the background" className="flex flex-col gap-1 text-[11.5px] text-muted">
+      {tasks.map((t) => (
+        <li key={t.id} className="flex items-center gap-2 min-w-0" title={`${t.description}\nClaude started this in the background and answers again here when it finishes.`}>
+          <span aria-hidden="true" className="w-3 h-3 flex-none rounded-full border-2 border-line-2 border-t-accent animate-spin" />
+          <span className="flex-none">{what[t.kind]} is still running:</span>{' '}
+          <span className="min-w-0 truncate text-fg">{t.description || 'in the background'}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -423,7 +445,8 @@ function ContextRing({ context }: { context: NonNullable<ClaudeView['context']> 
 /**
  * Under the box, as Claude Desktop has them ("Opus 5.5  Extra  ◔"): the conversation's model and its effort, each its
  * own button with the choices your Claude Code offers, and how full the context is. A choice holds for this pull
- * request's next questions; Settings › Claude has the default.
+ * request's next questions; Settings › Claude has the default. First, whether Claude may change files: only while you
+ * contribute (the pull request checked out on its branch; the switch in the header).
  */
 function ModelBar({ prKey, view, onError }: { prKey: string; view: ClaudeView | undefined; onError(message: string): void }) {
   const settings = useClaudeSettings();
@@ -438,8 +461,20 @@ function ModelBar({ prKey, view, onError }: { prKey: string; view: ClaudeView | 
     if (choice) await api.chooseClaudeModel(prKey, choice === 'default' ? null : choice).catch((err: unknown) => onError(errorText(err)));
   };
   const item = 'h-6 px-2 rounded-md text-[12px] hover:bg-raised cursor-pointer whitespace-nowrap';
+  const checkout = useSnapshot(prKey)?.worktree;
+  const editing = checkout?.checkout === 'editing' && checkout.branch !== null;
   return (
     <span className="flex items-center justify-end gap-0.5 min-w-0">
+      {checkout && (
+        <span
+          role="img"
+          aria-label={editing ? 'Claude can change files' : 'Claude can only read'}
+          title={editing ? `Claude can change files on ${checkout.branch}; you commit and push them.` : 'Reviewing: Claude can read the code, not change it. Switch to Contribute in the header to let it.'}
+          className={cx('grid place-items-center w-6 h-6 flex-none', editing ? 'text-accent' : 'text-muted')}
+        >
+          <Octicon name={editing ? 'git-branch' : 'eye'} size={13} />
+        </span>
+      )}
       <button
         type="button"
         aria-haspopup="menu"

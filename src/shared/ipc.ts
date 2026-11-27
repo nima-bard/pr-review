@@ -7,6 +7,7 @@ import type {
   ClaudeView,
   AuthStatus,
   BrowserExtensionInfo,
+  CheckoutMode,
   CodeSearchQuery,
   CodeSearchResult,
   CommitsData,
@@ -90,6 +91,18 @@ export interface Api {
   setThreadPlacement(key: string, threadId: string, line: number | null): Promise<void>;
   listCommits(key: string): Promise<CommitsData>;
   setCompare(key: string, from: string | null, label: string): Promise<void>;
+  /** Where switching to `mode` would check the pull request out (a checkout of yours, maybe), without switching. */
+  checkoutPlan(key: string, mode: CheckoutMode): Promise<{ path: string; yours: boolean }>;
+  /** Reads the pull request (following each push) or edits it on its branch; refused while Claude is busy with it. */
+  setCheckout(key: string, mode: CheckoutMode): Promise<void>;
+  /** While editing: commits every change in the checkout with `message`. */
+  commitLocal(key: string, message: string): Promise<void>;
+  /** While editing: brings in what was pushed since, under your own commits. */
+  pullLocal(key: string): Promise<void>;
+  /** While editing: pushes your commits to the pull request's branch (never forced). */
+  pushLocal(key: string): Promise<void>;
+  /** Throws away changes not committed to `paths` in the checkout, once you've said so in a native dialog. */
+  discardLocal(key: string, paths: string[]): Promise<void>;
   search(query: string, after?: string): Promise<SearchPage>;
   /** Suggestions for a search filter in `repo` ("owner/name"), matching what's typed. */
   filterSuggestions(repo: string, kind: SuggestionKind, query: string): Promise<FilterSuggestion[]>;
@@ -232,6 +245,12 @@ export const API_METHODS = [
   'setThreadPlacement',
   'listCommits',
   'setCompare',
+  'checkoutPlan',
+  'setCheckout',
+  'commitLocal',
+  'pullLocal',
+  'pushLocal',
+  'discardLocal',
   'search',
   'filterSuggestions',
   'inbox',
