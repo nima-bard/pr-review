@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - **Settings › General lists the repositories found**, each with the clone its pull requests are checked out from, so a folder picked one level off shows at a glance. "Folders with your clones" also takes a clone itself (the folder holding it was meant, but the clone now just works), and `~/` in it and in "Worktree folder" means your home folder. The worktree folder's placeholder reads as a hint, and its explanation shows where one of your own clones' pull requests would go.
 - **The views moved into a strip of icons on the left**, as in VS Code: Overview, Files, Search and Commits, and Settings at its foot. The Overview and the commits take the place of the file tree and the diffs. A matching strip on the right holds what goes with each: the pull request's details beside the Overview (open by default, in a narrower panel that keeps its own width, with failing checks or conflicts on its icon), the comments and Claude beside the files, nothing beside the commits. Both strips are there while a pull request is still loading, with a spinner on what isn't ready yet. The header's Overview · Files · Commits switch is gone, and its buttons follow the view.
