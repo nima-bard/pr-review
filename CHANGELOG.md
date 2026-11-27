@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
 
 - **A file’s header in the diffs stays on one line.** A long path no longer wraps: its folders give way from the left (“…CommandHandling/Properties/launchSettings.json”), so the file name and the folders nearest it stay in view, and the full path is in the tooltip.
 
