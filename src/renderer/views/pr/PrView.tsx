@@ -3,17 +3,15 @@ import type { PrPreview, PrSnapshot } from '../../../shared/model';
 import { api, errorText } from '../../api';
 import { retryPr } from '../../state/tabs';
 import { Octicon, PrStatePill } from '../../components/octicons';
-import { Badge, Button, cx, ErrorBox, Icon, Segmented, shortSha, Skeleton, Spinner, timeAgo } from '../../components/ui';
+import { Badge, Button, ErrorBox, Icon, shortSha, Spinner, timeAgo } from '../../components/ui';
 import { MergeDialog } from '../../dialogs/MergeDialog';
 import { SubmitReviewDialog } from '../../dialogs/SubmitReviewDialog';
 import { showChanges, VersionsDialog } from '../../dialogs/VersionsDialog';
 import { setSessionError, useSessions } from '../../state/sessions';
-import { updateUi, usePrUi, type PrViewKind } from '../../state/ui';
-import { CommitsView } from './CommitsView';
+import { prView, updateUi, usePrUi, type PrViewKind } from '../../state/ui';
 import { RunsDialog, RunsIndicator } from './ActionRuns';
 import { showActionsMenu } from '../../state/quickActions';
 import { FilesView } from './FilesView';
-import { Overview } from './Overview';
 import { useClaudeSettings } from '../../state/claude';
 import { loadClaudeView } from '../../state/sessions';
 
@@ -45,11 +43,6 @@ function sinceLastReview(snapshot: PrSnapshot): { text: string; action: string; 
     action: pushes > 0 ? `Review ${pushes} new push${pushes === 1 ? '' : 'es'}` : 'Review new commits',
     tooltip: `You last reviewed at ${shortSha(last)}${from ? ` (v${from.n})` : ''}; the PR is now at ${shortSha(snapshot.details.headRefOid)}${to ? ` (v${to.n})` : ''}. Show only what changed since then.`,
   };
-}
-
-/** In place of a view's count while the PR first loads. */
-function Pending() {
-  return <span role="img" aria-label="loading" title="Loading: the pull request is being checked out" className="w-3 h-3 rounded-full border-2 border-line-2 border-t-accent animate-spin" />;
 }
 
 /** Merge… (the merge dialog), or for a draft: Ready for review. */
@@ -88,15 +81,9 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
   const d = pr.details;
   const since = snapshot ? sinceLastReview(snapshot) : null;
   const drafts = snapshot?.drafts.length ?? 0;
-  const count = (n: number | undefined) => (n === undefined ? <Pending /> : <span className="px-1.5 rounded-full bg-chip text-[11px]">{n}</span>);
-  const views: { value: PrViewKind; label: React.ReactNode }[] = [
-    { value: 'overview', label: 'Overview' },
-    { value: 'files', label: <>Files {count(snapshot?.files.length)}</> },
-    { value: 'commits', label: <>Commits {count(snapshot && d.commitCount)}</> },
-  ];
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
-      {/* The view switch sits in the middle, so it stays put while the buttons beside it change with the view. */}
+    // The views are chosen in the strip of icons on the left; here the title, and the buttons for the view you're in.
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3.5 px-4 py-2.5 bg-panel border-b border-line flex-none">
       <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <StateBadge pr={pr} />
@@ -111,7 +98,6 @@ function Header({ pr, snapshot, view }: { pr: PrPreview; snapshot: PrSnapshot | 
           <code className="font-mono text-[11.5px] px-1.5 rounded bg-branch-bg text-branch">{d.baseRefName}</code> · <span className="text-add">+{d.additions}</span> <span className="text-del">−{d.deletions}</span>
         </div>
       </div>
-      <Segmented label="PR views" value={view} onChange={(v) => updateUi(key, { view: v })} options={views} />
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-2 min-w-0">
         {view === 'files' && snapshot && (
           <>
@@ -199,56 +185,6 @@ function StatusBar({ snapshot }: { snapshot: PrSnapshot }) {
   );
 }
 
-/** Files or Commits before the PR's first snapshot: their shape, and what the app is doing (fetching, checking out…). */
-function NotYet({ prKey, view }: { prKey: string; view: 'files' | 'commits' }) {
-  const progress = useSessions((s) => s.progress[prKey]);
-  const status = (
-    <div className="flex flex-col gap-1">
-      <Spinner label={progress ?? 'Loading…'} />
-      <span className="pl-5.5 text-[12px] text-muted">{view === 'files' ? 'The files' : 'The commits'} show once the pull request is checked out.</span>
-    </div>
-  );
-  if (view === 'commits') {
-    return (
-      <div className="h-full overflow-hidden px-5 py-4">
-        <div className="max-w-[1000px] mx-auto flex flex-col gap-3">
-          {status}
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-[52px] rounded-[10px]" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-  const rows = ['w-2/3', 'ml-4 w-1/2', 'ml-4 w-3/5', 'w-1/2', 'ml-4 w-2/3', 'ml-8 w-2/5', 'w-3/5'];
-  return (
-    <div className="h-full flex overflow-hidden">
-      <div className="w-[300px] flex-none flex flex-col gap-3 p-3 bg-side border-r border-line">
-        <Skeleton className="h-[26px]" />
-        <Skeleton className="h-[26px]" />
-        {rows.map((w, i) => (
-          <Skeleton key={i} className={`h-3 ${w}`} />
-        ))}
-      </div>
-      <div className="flex-1 min-w-0 flex flex-col gap-4 p-4">
-        {status}
-        {[0, 1].map((i) => (
-          <div key={i} aria-hidden="true" className="rounded-[10px] border border-line-2 overflow-hidden">
-            <div className="flex items-center gap-2 h-10 px-3 bg-subtle border-b border-line">
-              <Skeleton className="w-48 h-3" />
-            </div>
-            <div className="flex flex-col gap-2.5 p-3">
-              {['w-1/2', 'w-2/3', 'w-5/12', 'w-3/4', 'w-1/3'].map((w, j) => (
-                <Skeleton key={j} className={`h-3 ${w}`} />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
   const snapshot = useSessions((s) => s.snapshots[prKey]);
   const preview = useSessions((s) => s.previews[prKey]);
@@ -273,7 +209,7 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
     );
   }
 
-  const view = ui.view ?? 'overview';
+  const view = prView(ui);
   return (
     <div className="h-full flex flex-col">
       <Header pr={pr} snapshot={snapshot} view={view} />
@@ -283,9 +219,9 @@ export function PrView({ prKey, active }: { prKey: string; active: boolean }) {
         </div>
       )}
       <div className="flex-1 min-h-0">
-        {view === 'files' && (snapshot ? <FilesView snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} /> : <NotYet prKey={prKey} view="files" />)}
-        {view === 'overview' && <Overview pr={pr} snapshot={snapshot} />}
-        {view === 'commits' && (snapshot ? <CommitsView snapshot={snapshot} /> : <NotYet prKey={prKey} view="commits" />)}
+        {/* Every view sits in the pull request's frame (the strips of icons, the right panel), from the start: what needs
+            the checkout shows as loading until it's there. */}
+        <FilesView pr={pr} snapshot={snapshot} active={active && !ui.showSubmit && !ui.showVersions} />
       </div>
       {snapshot ? (
         <StatusBar snapshot={snapshot} />

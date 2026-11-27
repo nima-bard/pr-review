@@ -177,10 +177,6 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
-  const gear = useRef<HTMLButtonElement>(null);
-  const failing = d.checks.filter((c) => c.state === 'failure').length;
-  const viewed = snapshot?.files.filter((f) => f.viewed === 'VIEWED').length ?? 0;
 
   const post = async () => {
     setBusy(true);
@@ -210,8 +206,8 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
   const open = d.state === 'OPEN';
 
   return (
-    <div className="h-full flex flex-wrap overflow-y-auto">
-      <main className="flex-[999_1_560px] min-w-0 px-5 pt-4 pb-8">
+    <div className="h-full overflow-y-auto">
+      <main className="min-w-0 px-5 pt-4 pb-8">
         <div className="max-w-[1200px] mx-auto flex flex-col gap-4">
           {snapshot ? (
             <>
@@ -341,13 +337,45 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
           </section>
         </div>
       </main>
-      <aside aria-label="PR details" className="flex-[1_1_300px] min-w-0 bg-side border-l border-line px-3.5 pt-3.5 pb-6 flex flex-col gap-5">
+    </div>
+  );
+}
+
+/**
+ * The pull request's details: reviewers, checks, merge state, what's linked, your review and the checkout. In the
+ * right panel (its Details icon), so they're at hand from the files too; beside the Overview while it first loads.
+ */
+export function PrDetails({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot | undefined }) {
+  const d = pr.details;
+  const loaded = snapshot !== undefined;
+  const notYet = loaded ? undefined : 'Available once the pull request has loaded';
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const requestButton = useRef<HTMLButtonElement>(null);
+  const failing = d.checks.filter((c) => c.state === 'failure').length;
+  const viewed = snapshot?.files.filter((f) => f.viewed === 'VIEWED').length ?? 0;
+  const open = d.state === 'OPEN';
+  /** A change to the PR on GitHub (draft or ready), with its busy state and error. */
+  const change = async (run: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await run();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+      <div aria-label="PR details" className="min-w-0 px-3.5 pt-3.5 pb-6 flex flex-col gap-5">
         <section>
           <div className="flex items-center mb-2">
             <h2 className="flex-1 text-[11.5px] font-bold text-muted uppercase tracking-wider">Reviewers</h2>
             {open && d.viewerCan.update && (
               <button
-                ref={gear}
+                ref={requestButton}
                 type="button"
                 aria-label="Request reviews"
                 title={notYet ?? 'Request reviews'}
@@ -356,11 +384,11 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
                 onClick={() => setPicking((p) => !p)}
                 className="grid place-items-center w-6 h-6 rounded-md text-muted hover:text-fg hover:bg-raised-2 cursor-pointer disabled:opacity-40 disabled:cursor-default"
               >
-                <Octicon name="gear" size={14} />
+                <Octicon name="person-add" size={14} />
               </button>
             )}
           </div>
-          {picking && <ReviewerPicker prKey={pr.key} anchor={gear} onClose={() => setPicking(false)} />}
+          {picking && <ReviewerPicker prKey={pr.key} anchor={requestButton} onClose={() => setPicking(false)} />}
           {d.reviewers.length === 0 && <div className="text-muted text-[12.5px]">None yet</div>}
           {d.reviewers.map((r) => (
             <div key={r.login} className="flex items-center gap-2 h-[30px]">
@@ -432,6 +460,7 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
               </div>
             </div>
           )}
+          {error && <div className="mt-2 text-[12px] text-del">{error}</div>}
         </section>
         {(d.workItems.length > 0 || d.linkedIssues.length > 0 || d.labels.length > 0) && (
           <section>
@@ -497,7 +526,6 @@ export function Overview({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot
             </span>
           </div>
         </section>
-      </aside>
-    </div>
+      </div>
   );
 }

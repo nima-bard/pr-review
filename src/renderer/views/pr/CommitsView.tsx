@@ -2,8 +2,13 @@ import { useEffect, useState } from 'react';
 import type { CommitsData, PrSnapshot } from '../../../shared/model';
 import { api, errorText } from '../../api';
 import { Badge, Button, ErrorBox, shortSha, Spinner, timeAgo } from '../../components/ui';
+import { showChanges } from '../../dialogs/VersionsDialog';
 import { updateUi } from '../../state/ui';
 
+/**
+ * The pull request's commits, grouped by push, chosen with the Commits icon on the left: they take the place of the
+ * file tree and the diffs. "Changes after this" shows the diffs again, from that commit.
+ */
 export function CommitsView({ snapshot }: { snapshot: PrSnapshot }) {
   const [data, setData] = useState<CommitsData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -11,9 +16,9 @@ export function CommitsView({ snapshot }: { snapshot: PrSnapshot }) {
     api.listCommits(snapshot.key).then(setData, (err: unknown) => setError(errorText(err)));
   }, [snapshot.key, snapshot.details.headRefOid]);
 
-  const showFrom = async (sha: string, label: string) => {
-    await api.setCompare(snapshot.key, sha, label);
-    updateUi(snapshot.key, { view: 'files' });
+  const showFrom = (sha: string, label: string) => {
+    updateUi(snapshot.key, { sidebar: 'files', showTree: true, activeContent: 'changes' });
+    showChanges(snapshot.key, sha, label);
   };
 
   return (
@@ -50,7 +55,7 @@ export function CommitsView({ snapshot }: { snapshot: PrSnapshot }) {
                       </span>
                     </span>
                     <span className="font-mono text-[11.5px] text-soft">{shortSha(c.sha)}</span>
-                    <Button size="sm" onClick={() => void showFrom(c.sha, `Since ${shortSha(c.sha)}`)}>
+                    <Button size="sm" onClick={() => showFrom(c.sha, `Since ${shortSha(c.sha)}`)}>
                       Changes after this
                     </Button>
                   </div>

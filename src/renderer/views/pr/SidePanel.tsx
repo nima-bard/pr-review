@@ -1,20 +1,21 @@
-import type { PrSnapshot } from '../../../shared/model';
+import type { PrPreview, PrSnapshot } from '../../../shared/model';
 import { api, errorText } from '../../api';
-import { Icon, PanelTitle } from '../../components/ui';
+import { Icon, PanelTitle, Spinner } from '../../components/ui';
 import { useClaudeSettings } from '../../state/claude';
 import { setSessionError, useClaudeView } from '../../state/sessions';
-import { getPrUi, showSidePanel, updateUi, usePrUi, type PrUi, type SidePanelTab } from '../../state/ui';
+import { getPrUi, leaveCommits, panelMode, type PrUi, showSidePanel, type SidePanelTab, updateUi, usePrUi } from '../../state/ui';
 import { ClaudeConversation } from './ClaudeConversation';
 import { ConversationsPanel } from './ConversationsPanel';
+import { PrDetails } from './Overview';
 import { claudeMenuItems } from './viewMenus';
 
 /** What the side panel shows: Claude only while Claude is on in Settings. */
 function shownTab(ui: PrUi, claudeOn: boolean): SidePanelTab {
-  return claudeOn ? ui.panelTab : 'comments';
+  return ui.panelTab === 'claude' && !claudeOn ? 'comments' : ui.panelTab;
 }
 
 function shows(ui: PrUi, claudeOn: boolean, tab: SidePanelTab): boolean {
-  return ui.view === 'files' && ui.showPanel && shownTab(ui, claudeOn) === tab;
+  return panelMode(ui) === 'files' && ui.showPanel && shownTab(ui, claudeOn) === tab;
 }
 
 /** Whether the side panel is on screen showing `tab`, for the button that opens it. */
@@ -32,13 +33,33 @@ export function toggleSidePanel(key: string, tab: SidePanelTab): void {
 
 /** Whether the side panel is on screen, whichever it shows. */
 function isOpen(ui: PrUi): boolean {
-  return ui.view === 'files' && ui.showPanel;
+  return panelMode(ui) === 'files' && ui.showPanel;
 }
 
 /** ⇧⌘C: show the side panel as you left it, comments or Claude, or hide it. Opens the Files view if needed. */
 export function togglePanel(key: string): void {
   if (isOpen(getPrUi(key))) updateUi(key, { showPanel: false });
-  else updateUi(key, { view: 'files', showPanel: true });
+  else updateUi(key, (ui) => ({ showPanel: true, view: 'files', ...leaveCommits(ui) }));
+}
+
+/** The Overview's Details icon: show or hide the pull request's details beside it. */
+export function toggleDetails(key: string): void {
+  updateUi(key, (ui) => ({ showDetails: !ui.showDetails }));
+}
+
+/**
+ * The right panel beside the Overview: the pull request's details (reviewers, checks, merge, what's linked, your review
+ * and the checkout). There from the start, since they come with the pull request from GitHub.
+ */
+export function DetailsPanel({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot | undefined }) {
+  return (
+    <aside aria-label="Details panel" className="h-full flex flex-col bg-side">
+      <PanelTitle title="Details" />
+      <section aria-label="Details" className="flex-1 min-h-0 overflow-y-auto">
+        <PrDetails pr={pr} snapshot={snapshot} />
+      </section>
+    </aside>
+  );
 }
 
 /** Whether Claude is answering or has a question on its way, for a spinner on its button. */
@@ -73,12 +94,22 @@ function OpenInClaude({ prKey }: { prKey: string }) {
   );
 }
 
+/** In place of a panel's view that needs the checkout, while the pull request is still being checked out. */
+function StillLoading({ what }: { what: string }) {
+  return (
+    <div className="px-3 py-3 flex flex-col gap-1">
+      <Spinner label="Loading…" />
+      <span className="pl-5.5 text-[12px] text-muted">{what} show once the pull request is checked out.</span>
+    </div>
+  );
+}
+
 /**
  * The Files view's right-hand panel: the review comments, or the conversation with Claude when Claude is on, chosen in
  * the strip of icons beside it. Both stay mounted, so switching keeps your place and what you were typing.
  */
-export function SidePanel({ snapshot }: { snapshot: PrSnapshot }) {
-  const key = snapshot.key;
+export function SidePanel({ pr, snapshot }: { pr: PrPreview; snapshot: PrSnapshot | undefined }) {
+  const key = pr.key;
   const ui = usePrUi(key);
   const claudeOn = useClaudeSettings((s) => s.enabled);
   const tab = shownTab(ui, claudeOn);
@@ -87,11 +118,11 @@ export function SidePanel({ snapshot }: { snapshot: PrSnapshot }) {
     <aside aria-label="Side panel" data-side-panel className="h-full flex flex-col bg-side">
       <PanelTitle title={tab === 'claude' ? 'Claude' : 'Comments'}>{claudeOn && tab === 'claude' && <OpenInClaude prKey={key} />}</PanelTitle>
       <section aria-label="Comments" hidden={tab !== 'comments'} className="flex-1 min-h-0 flex flex-col">
-        <ConversationsPanel snapshot={snapshot} />
+        {snapshot ? <ConversationsPanel snapshot={snapshot} /> : <StillLoading what="The review comments" />}
       </section>
       {claudeOn && (
         <section aria-label="Claude" hidden={tab !== 'claude'} className="flex-1 min-h-0 flex flex-col">
-          <ClaudeConversation snapshot={snapshot} shown={tab === 'claude'} />
+          {snapshot ? <ClaudeConversation snapshot={snapshot} shown={tab === 'claude'} /> : <StillLoading what="The conversation with Claude" />}
         </section>
       )}
     </aside>

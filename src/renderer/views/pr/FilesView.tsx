@@ -2,14 +2,14 @@ import { File as PierreFile } from '@pierre/diffs/react';
 import type { SelectedLineRange } from '@pierre/diffs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
-import type { PrSnapshot } from '../../../shared/model';
-import { Button, cx, Icon, Kbd, PanelTitle, Segmented, Spinner } from '../../components/ui';
+import type { PrPreview, PrSnapshot } from '../../../shared/model';
+import { Button, cx, Icon, Kbd, PanelTitle, Segmented, Skeleton, Spinner } from '../../components/ui';
 import { SHORTCUTS, useReviewKeys } from './useReviewKeys';
 import { commentedPaths, FileSection, FullFileDiff, strayThreads, threadsForFile } from '../../diff/FileSection';
 import { ThreadCard } from '../../diff/ThreadCard';
 import { useFileContent } from '../../diff/useFileDiff';
 import { api } from '../../api';
-import { appendToSummary, closeContentTab, closeContentTabs, getPrUi, moveContentTab, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
+import { appendToSummary, closeContentTab, closeContentTabs, getPrUi, moveContentTab, prView, setPrefs, updateUi, usePrefs, usePrUi } from '../../state/ui';
 import { MARKER_CLASS, useTabReorder } from '../../components/useTabReorder';
 import { FileIcon } from '../../components/fileIcons';
 import { fileMenuItems, runFileAction } from '../../components/fileMenu';
@@ -22,8 +22,12 @@ import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
 import { Octicon } from '../../components/octicons';
 import { useTextSelectionContext } from '../../diff/useTextSelectionContext';
-import { ActivityBar, ActivityCount, type Activity } from './ActivityBar';
-import { ClaudeSpinner, SidePanel, toggleSidePanel, useClaudeWorking, useSidePanelShows } from './SidePanel';
+import { type Activity, ActivityBar, ActivityCount, ActivityLoading } from './ActivityBar';
+import { CommitsView } from './CommitsView';
+import { Overview } from './Overview';
+import { openSettings } from '../../state/tabs';
+import { useSessions } from '../../state/sessions';
+import { ClaudeSpinner, DetailsPanel, SidePanel, toggleDetails, toggleSidePanel, useClaudeWorking, useSidePanelShows } from './SidePanel';
 import { useClaudeSettings } from '../../state/claude';
 import { treeCompare } from './treeOrder';
 
@@ -403,36 +407,133 @@ function CheatSheet({ onClose }: { onClose(): void }) {
   );
 }
 
-export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; active?: boolean }) {
-  const ui = usePrUi(snapshot.key);
+/** The keyboard shortcuts of the files, once the pull request has loaded (they need its files and threads). */
+function ReviewKeys({ snapshot, enabled, onHelp }: { snapshot: PrSnapshot; enabled: boolean; onHelp(): void }) {
+  useReviewKeys(snapshot, enabled, onHelp);
+  return null;
+}
+
+/** The tree's place while the pull request is still being checked out. */
+function TreeSkeleton({ title }: { title: string }) {
+  const rows = ['w-2/3', 'ml-4 w-1/2', 'ml-4 w-3/5', 'w-1/2', 'ml-4 w-2/3', 'ml-8 w-2/5', 'w-3/5'];
+  return (
+    <div className="h-full flex flex-col bg-side">
+      <PanelTitle title={title} />
+      <div aria-hidden="true" className="flex flex-col gap-3 p-3">
+        <Skeleton className="h-[26px]" />
+        {rows.map((w, i) => (
+          <Skeleton key={i} className={`h-3 ${w}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The diffs' (or the commits') place while the pull request is still being checked out, with how far along it is. */
+function ContentSkeleton({ prKey, what }: { prKey: string; what: string }) {
+  const progress = useSessions((s) => s.progress[prKey]);
+  return (
+    <div className="h-full flex flex-col gap-4 p-4 overflow-hidden">
+      <div className="flex flex-col gap-1">
+        <Spinner label={progress ?? 'Loading…'} />
+        <span className="pl-5.5 text-[12px] text-muted">{what} show once the pull request is checked out.</span>
+      </div>
+      {[0, 1].map((i) => (
+        <div key={i} aria-hidden="true" className="rounded-[10px] border border-line-2 overflow-hidden">
+          <div className="flex items-center gap-2 h-10 px-3 bg-subtle border-b border-line">
+            <Skeleton className="w-48 h-3" />
+          </div>
+          <div className="flex flex-col gap-2.5 p-3">
+            {['w-1/2', 'w-2/3', 'w-5/12', 'w-3/4', 'w-1/3'].map((w, j) => (
+              <Skeleton key={j} className={`h-3 ${w}`} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A pull request's frame: the strip of icons on the left (Overview, Files, Search, Commits, and Settings at its foot),
+ * what they show (the Overview and the commits in place of the tree and the diffs, which stay mounted behind them so
+ * you come back to your place), and the right panel with its strip (Details, Comments, Claude). It shows from the
+ * start: while the pull request is checked out (`snapshot` undefined), the Overview and Details are there already, and
+ * what needs the checkout has a spinner on its icon and a placeholder in its place.
+ */
+export function FilesView({ pr, snapshot, active = true }: { pr: PrPreview; snapshot: PrSnapshot | undefined; active?: boolean }) {
+  const key = pr.key;
+  const ui = usePrUi(key);
+  const loaded = snapshot !== undefined;
   const [help, setHelp] = useState(false);
   const toggleHelp = useCallback(() => setHelp((h) => !h), []);
-  useReviewKeys(snapshot, active && !help, toggleHelp);
+  const overview = prView(ui) === 'overview';
+  const commits = !overview && ui.sidebar === 'commits';
+  const covered = overview || commits;
   const root = useRef<HTMLDivElement>(null);
-  useTextSelectionContext(snapshot.key, root, active);
-  const panelIds = [...(ui.showTree ? ['tree'] : []), 'content', ...(ui.showPanel ? ['side'] : [])];
-  const layout = useDefaultLayout({ id: `files-${snapshot.role}`, panelIds });
-  const key = snapshot.key;
+  useTextSelectionContext(key, root, active);
+  // Beside the Overview its details, beside the files the comments or Claude, beside the commits nothing. The details
+  // are their own panel (narrower by default), so each keeps its own width.
+  const showDetails = overview && ui.showDetails;
+  const showSide = !covered && ui.showPanel;
+  const panelIds = [...(ui.showTree && !covered ? ['tree'] : []), 'content', ...(showDetails ? ['details'] : []), ...(showSide ? ['side'] : [])];
+  const layout = useDefaultLayout({ id: `files-${pr.role}`, panelIds });
   const claudeOn = useClaudeSettings((s) => s.enabled);
   const commentsShown = useSidePanelShows(key, 'comments');
   const claudeShown = useSidePanelShows(key, 'claude');
   const working = useClaudeWorking(key);
-  const unresolved = snapshot.threads.filter((t) => !t.isResolved).length;
-  const sidebarShows = (id: 'files' | 'search') => ui.showTree && ui.sidebar === id;
+  const unresolved = snapshot ? snapshot.threads.filter((t) => !t.isResolved).length : 0;
+  // On what needs the checkout, until it's there.
+  const pending = loaded ? undefined : <ActivityLoading />;
+  const sidebarShows = (id: 'files' | 'search') => !covered && ui.showTree && ui.sidebar === id;
   const showSidebar = (id: 'files' | 'search') =>
-    updateUi(key, (u) => (sidebarShows(id) ? { showTree: false } : { showTree: true, sidebar: id, ...(id === 'search' ? { searchFocusSeq: u.searchFocusSeq + 1 } : {}) }));
+    updateUi(key, (u) => (sidebarShows(id) ? { showTree: false } : { view: 'files', showTree: true, sidebar: id, ...(id === 'search' ? { searchFocusSeq: u.searchFocusSeq + 1 } : {}) }));
+  // Pressed again, the Overview and the commits go back to the files.
+  const backToFiles = () => updateUi(key, (u) => ({ view: 'files', showTree: true, sidebar: u.sidebar === 'commits' ? 'files' : u.sidebar }));
+  const d = pr.details;
   const left: Activity[] = [
-    { id: 'files', label: 'Files', title: 'Files (⇧⌘E)', icon: <Icon name="file" size={20} />, active: sidebarShows('files'), onClick: () => showSidebar('files') },
-    { id: 'search', label: 'Search', title: 'Find in files (⇧⌘F)', icon: <Icon name="search" size={20} />, active: sidebarShows('search'), onClick: () => showSidebar('search') },
+    {
+      id: 'overview',
+      label: 'Overview',
+      title: 'Overview: the description and the conversation, in place of the files',
+      icon: <Octicon name="home" size={20} />,
+      active: overview,
+      onClick: () => (overview ? backToFiles() : updateUi(key, { view: 'overview' })),
+    },
+    { id: 'files', label: 'Files', title: 'Files (⇧⌘E)', icon: <Icon name="file" size={20} />, active: sidebarShows('files'), badge: pending, onClick: () => showSidebar('files') },
+    { id: 'search', label: 'Search', title: 'Find in files (⇧⌘F)', icon: <Icon name="search" size={20} />, active: sidebarShows('search'), badge: pending, onClick: () => showSidebar('search') },
+    {
+      id: 'commits',
+      label: 'Commits',
+      title: 'Commits, in place of the files',
+      icon: <Octicon name="git-commit" size={20} />,
+      active: commits,
+      badge: pending,
+      onClick: () => (commits ? backToFiles() : updateUi(key, { view: 'files', sidebar: 'commits' })),
+    },
   ];
-  const right: Activity[] = [
+  // At the bottom of the left strip, like VS Code's gear.
+  const settings: Activity[] = [{ id: 'settings', label: 'Settings', title: 'Settings (⌘,)', icon: <Octicon name="gear" size={20} />, active: false, onClick: () => openSettings() }];
+  // Details' badge: failing checks in red, or conflicts with the base branch.
+  const failing = d.checks.filter((c) => c.state === 'failure').length;
+  const conflicts = d.state === 'OPEN' && d.mergeable === 'CONFLICTING';
+  const details: Activity = {
+    id: 'details',
+    label: `Details${failing > 0 ? `, ${failing} check${failing === 1 ? '' : 's'} failing` : conflicts ? ', has conflicts' : ''}`,
+    title: 'Details: reviewers, checks, merge, linked issues and your checkout',
+    icon: <Icon name="info" size={20} />,
+    active: showDetails,
+    badge: failing > 0 ? <ActivityCount n={failing} tone="bad" /> : conflicts ? <ActivityCount n="!" tone="warn" /> : undefined,
+    onClick: () => toggleDetails(key),
+  };
+  const chat: Activity[] = [
     {
       id: 'comments',
       label: `Comments${unresolved > 0 ? `, ${unresolved} unresolved` : ''}`,
       title: 'Review comments (⇧⌘C)',
       icon: <Octicon name="comment-discussion" size={20} />,
       active: commentsShown,
-      badge: unresolved > 0 ? <ActivityCount n={unresolved} /> : undefined,
+      badge: pending ?? (unresolved > 0 ? <ActivityCount n={unresolved} /> : undefined),
       onClick: () => toggleSidePanel(key, 'comments'),
     },
     ...(claudeOn
@@ -443,41 +544,58 @@ export function FilesView({ snapshot, active = true }: { snapshot: PrSnapshot; a
             title: 'The conversation with Claude about this pull request (⇧⌘A)',
             icon: <Octicon name="comment-ai" size={20} />,
             active: claudeShown,
-            badge: working ? <ClaudeSpinner /> : undefined,
+            badge: pending ?? (working ? <ClaudeSpinner /> : undefined),
             onClick: () => toggleSidePanel(key, 'claude'),
           },
         ]
       : []),
   ];
+  const right: Activity[] = overview ? [details] : commits ? [] : chat;
   return (
     <>
+      {snapshot && <ReviewKeys snapshot={snapshot} enabled={active && !help && !covered} onHelp={toggleHelp} />}
       {help && <CheatSheet onClose={() => setHelp(false)} />}
       <div ref={root} className="h-full flex">
-        <ActivityBar label="Files and search" edge="left" items={left} />
+        <ActivityBar label="Overview, files and commits" edge="left" items={left} bottom={settings} />
         <div className="flex-1 min-w-0">
           <Group orientation="horizontal" className="h-full" resizeTargetMinimumSize={GRAB_AREA} defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
-            {ui.showTree && (
+            {ui.showTree && !covered && (
               <>
                 <Panel id="tree" defaultSize="22" minSize={200} maxSize="45">
-                  <Sidebar snapshot={snapshot} />
+                  {snapshot ? <Sidebar snapshot={snapshot} /> : <TreeSkeleton title={ui.sidebar === 'search' ? 'Search' : 'Files'} />}
                 </Panel>
                 <Separator className={SEPARATOR} />
               </>
             )}
             <Panel id="content" minSize={420}>
-              <Content snapshot={snapshot} active={active} />
+              {overview && <Overview pr={pr} snapshot={snapshot} />}
+              {commits && (snapshot ? <CommitsView snapshot={snapshot} /> : <ContentSkeleton prKey={key} what="The commits" />)}
+              {!snapshot && !covered && <ContentSkeleton prKey={key} what="The files" />}
+              {snapshot && (
+                <div className={cx('h-full', covered && 'hidden')}>
+                  <Content snapshot={snapshot} active={active && !covered} />
+                </div>
+              )}
             </Panel>
-            {ui.showPanel && (
+            {showDetails && (
+              <>
+                <Separator className={SEPARATOR} />
+                <Panel id="details" defaultSize="20" minSize={240} maxSize="35">
+                  <DetailsPanel pr={pr} snapshot={snapshot} />
+                </Panel>
+              </>
+            )}
+            {showSide && (
               <>
                 <Separator className={SEPARATOR} />
                 <Panel id="side" defaultSize="26" minSize={280} maxSize="45">
-                  <SidePanel snapshot={snapshot} />
+                  <SidePanel pr={pr} snapshot={snapshot} />
                 </Panel>
               </>
             )}
           </Group>
         </div>
-        <ActivityBar label="Comments and Claude" edge="right" items={right} />
+        {right.length > 0 && <ActivityBar label="Side panels" edge="right" items={right} />}
       </div>
     </>
   );

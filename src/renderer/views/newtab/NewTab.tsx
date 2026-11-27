@@ -286,9 +286,9 @@ function ForYou({ tabId }: { tabId: string }) {
     try {
       const res = await openPr(value, tabId);
       if (!res.ok) setProblem({ message: res.message, ...(res.reason === 'no-clone' && res.ref ? { slug: `${res.ref.owner}/${res.ref.repo}` } : {}) });
-      // A link to the PR's Files changed or Commits tab opens that view.
+      // A link to the PR's Files changed or Commits tab opens the files, with the commits shown for the latter.
       const view = res.ok ? prViewFromUrl(value) : null;
-      if (res.ok && view) updateUi(res.key, { view });
+      if (res.ok && view) updateUi(res.key, view === 'commits' ? { view: 'files', sidebar: 'commits' } : { view });
     } catch (err) {
       setProblem({ message: errorText(err) });
     } finally {

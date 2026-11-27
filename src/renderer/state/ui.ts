@@ -4,7 +4,7 @@ import { hasUnsavedText, unsentKey, type ComposerTarget } from './unsent';
 import { moveToSlot } from './reorder';
 import { setViewContext } from './viewContext';
 
-export type PrViewKind = 'overview' | 'files' | 'commits';
+export type PrViewKind = 'overview' | 'files';
 export type ContentTab = { id: 'changes'; kind: 'changes' } | { id: string; kind: 'file'; path: string; preview: boolean; changed: boolean };
 
 export type { ComposerTarget } from './unsent';
@@ -20,9 +20,11 @@ export interface PrUi {
   tree: 'changed' | 'all';
   layout: 'split' | 'unified';
   showTree: boolean;
-  /** The Files view's side panel, on `panelTab`. */
+  /** The right panel beside the files (Files and Search), on `panelTab`: the comments or Claude. */
   showPanel: boolean;
   panelTab: SidePanelTab;
+  /** The right panel beside the Overview: the pull request's details. */
+  showDetails: boolean;
   scope: 'pr' | 'file';
   filter: 'open' | 'mine' | 'reply' | 'outdated' | 'resolved' | 'all';
   contentTabs: ContentTab[];
@@ -50,8 +52,8 @@ export interface PrUi {
   showVersions: boolean;
   /** The label of a comparison being switched to, until its file list arrives. */
   pendingCompare: string | null;
-  /** The left sidebar: the file tree, or Find in files. */
-  sidebar: 'files' | 'search';
+  /** The left panel: the file tree, Find in files, or the commits (which take the place of the diffs too). */
+  sidebar: 'files' | 'search' | 'commits';
   search: CodeSearchQuery;
   /** Whether the "files to include / exclude" fields show. */
   searchDetails: boolean;
@@ -74,6 +76,7 @@ const DEFAULT_UI: PrUi = {
   showTree: true,
   showPanel: true,
   panelTab: 'comments',
+  showDetails: true,
   scope: 'pr',
   filter: 'open',
   contentTabs: [{ id: 'changes', kind: 'changes' }],
@@ -109,6 +112,11 @@ interface UiState {
 
 export const useUiStore = create<UiState>(() => ({ byKey: {} }));
 
+/** Which view a pull request is in: the Overview until you choose another (`view` starts unset). */
+export function prView(ui: Pick<PrUi, 'view'>): PrViewKind {
+  return ui.view ?? 'overview';
+}
+
 export function usePrUi(key: string): PrUi {
   return useUiStore((s) => s.byKey[key] ?? DEFAULT_UI);
 }
@@ -119,7 +127,8 @@ export function getPrUi(key: string): PrUi {
 
 /** Shows the side panel on `tab`, in the Files view. */
 export function showSidePanel(key: string, tab: SidePanelTab): void {
-  updateUi(key, { view: 'files', showPanel: true, panelTab: tab });
+  // The comments and Claude are beside the files: from the Overview or the commits, go there.
+  updateUi(key, (ui) => ({ showPanel: true, panelTab: tab, view: 'files', ...leaveCommits(ui) }));
 }
 
 /** Show the side panel on `tab`, or close it when it already shows `tab`. */
@@ -131,7 +140,7 @@ export function toggleSidePanel(key: string, tab: SidePanelTab): void {
 
 /** Whether the side panel is on screen showing `tab`. */
 export function sidePanelShows(ui: PrUi, tab: SidePanelTab): boolean {
-  return ui.view === 'files' && ui.showPanel && ui.panelTab === tab;
+  return panelMode(ui) === 'files' && ui.showPanel && ui.panelTab === tab;
 }
 
 /** "Ask Claude" on a review thread: the conversation, with the thread over its box for the next question. */
@@ -155,6 +164,20 @@ export function updateUi(key: string, patch: Partial<PrUi> | ((ui: PrUi) => Part
   });
 }
 
+/**
+ * What the left side shows, which decides the right panel: the Overview has the details beside it, the files (and
+ * Find in files) the comments and Claude, and the commits nothing.
+ */
+export function panelMode(ui: PrUi): 'overview' | 'commits' | 'files' {
+  if (prView(ui) === 'overview') return 'overview';
+  return ui.sidebar === 'commits' ? 'commits' : 'files';
+}
+
+/** The commits cover the tree and the diffs: going to a file or a thread shows the files again. */
+export function leaveCommits(ui: PrUi): Partial<PrUi> {
+  return ui.sidebar === 'commits' ? { sidebar: 'files', showTree: true } : {};
+}
+
 export function openFileTab(key: string, path: string, changed: boolean, preview: boolean): void {
   updateUi(key, (ui) => {
     const id = `file:${path}`;
@@ -165,7 +188,7 @@ export function openFileTab(key: string, path: string, changed: boolean, preview
     } else if (!preview) {
       tabs = tabs.map((t) => (t.id === id && t.kind === 'file' ? { ...t, preview: false } : t));
     }
-    return { contentTabs: tabs, activeContent: id, view: 'files' };
+    return { contentTabs: tabs, activeContent: id, view: 'files', ...leaveCommits(ui) };
   });
 }
 
@@ -234,7 +257,7 @@ export function requestComposer(key: string, next: ComposerTarget | null): void 
 export function focusFile(key: string, path: string, threadId: string | null = null, elementId: string | null = null): void {
   // Going to a thread selects it (highlighted, and what the Claude box asks about), even when it was already the one.
   if (threadId) setViewContext(key, { kind: 'thread', threadId });
-  updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusElement: elementId, focusSeq: ui.focusSeq + 1, view: 'files' }));
+  updateUi(key, (ui) => ({ activeContent: 'changes', focusPath: path, focusThread: threadId, focusElement: elementId, focusSeq: ui.focusSeq + 1, view: 'files', ...leaveCommits(ui) }));
 }
 
 export interface ViewPrefs {

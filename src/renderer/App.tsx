@@ -9,7 +9,7 @@ import { loadQuickActions, prActions, runQuickAction } from './state/quickAction
 import { loadClaudeSettings, useClaudeSettings } from './state/claude';
 import { loadAppSettings } from './state/settings';
 import { activate, activateIndex, closePrTabs, closeTab, newTab, openPr, openPrLink, openSettings, popOutKey, restoreTabs, useTabs } from './state/tabs';
-import { getPrUi, openFind, setPrefs, showSearch, stepFind, updateUi, usePrefs } from './state/ui';
+import { getPrUi, openFind, prView, setPrefs, showSearch, stepFind, updateUi, usePrefs } from './state/ui';
 import { NewTab } from './views/newtab/NewTab';
 import { SettingsView } from './views/newtab/SettingsView';
 import { PrView } from './views/pr/PrView';
@@ -74,7 +74,12 @@ export function App() {
       else if (action === 'toggle-word-wrap') setPrefs({ wordWrap: !usePrefs.getState().wordWrap });
       else if (tab?.kind === 'pr') {
         if (action === 'refresh') void api.refreshPr(tab.key);
-        if (action === 'toggle-tree') updateUi(tab.key, { showTree: !getPrUi(tab.key).showTree });
+        if (action === 'toggle-tree') {
+          // From the Overview or the commits (which cover the tree), ⌘B goes back to the files.
+          const u = getPrUi(tab.key);
+          if (prView(u) === 'overview' || u.sidebar === 'commits') updateUi(tab.key, { view: 'files', showTree: true, sidebar: u.sidebar === 'commits' ? 'files' : u.sidebar });
+          else updateUi(tab.key, { showTree: !u.showTree });
+        }
         if (action === 'layout-split' || action === 'layout-unified') updateUi(tab.key, { layout: action === 'layout-split' ? 'split' : 'unified' });
         if (action === 'toggle-comments') togglePanel(tab.key);
         if (action === 'find-in-files') showSearch(tab.key, selectedCode());

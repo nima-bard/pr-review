@@ -53,6 +53,7 @@ export function TabBar() {
   // The repo name only helps tell tabs apart when PRs from more than one repo are open.
   const showRepo = new Set(tabs.flatMap((t) => (t.kind === 'pr' ? [repoOfKey(t.key)] : []))).size > 1;
   const reorder = useTabReorder('app', tabs.map((t) => t.id), moveTab);
+  const prInFront = tabs.find((t) => t.id === activeId)?.kind === 'pr';
   return (
     <div {...reorder.rowProps} className="drag flex items-end gap-1 pl-[84px] pr-2.5 min-h-[42px] bg-titlebar border-b border-line flex-none">
       {tabs.map((tab, index) => {
@@ -111,8 +112,9 @@ export function TabBar() {
       </button>
       <div className="flex-1" />
       <UpdateNotice />
-      {/* Settings in sight on every page (also ⌘, and the app menu): it's where agents and the rest are set up. */}
-      {!popOutKey && (
+      {/* Settings in sight (also ⌘, and the app menu): here on the New tab and Settings pages; a pull request has its
+          gear at the bottom of the strip of icons on the left. */}
+      {!popOutKey && !prInFront && (
         <button
           type="button"
           title="Settings (⌘,)"

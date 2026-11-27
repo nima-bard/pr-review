@@ -244,7 +244,7 @@ test('opens a PR into a worktree, re-anchors an outdated thread and submits a re
   // PRs open on the Overview, which lists the review threads; the thread is then checked in the diff.
   const threads = win.getByRole('region', { name: 'Review threads' });
   await expect(threads).toContainText('Can items be negative here?', { timeout: 20_000 });
-  await win.getByRole('button', { name: /^Files/ }).click();
+  await win.getByRole('navigation', { name: 'Overview, files and commits' }).getByRole('button', { name: 'Files', exact: true }).click();
 
   const card = win.locator('[id="thread-T_outdated"]');
   await expect(card).toBeVisible({ timeout: 20_000 });
@@ -316,6 +316,7 @@ test('asking Claude about a line: the line gets a marker, the answer is in the s
   const answer = 'Yes, negative items would lower the total. I added a comment.';
   const panel = win.getByRole('region', { name: 'Claude' });
   const comments = win.getByRole('region', { name: 'Comments' });
+  // Beside the files, the right panel starts on the comments.
   await expect(comments).toBeVisible();
   await expect(panel).toHaveCount(0);
   await expect(win.getByText(answer)).toBeHidden();
@@ -325,7 +326,7 @@ test('asking Claude about a line: the line gets a marker, the answer is in the s
   await expect(comments).toHaveCount(0);
 
   // Removing the marker takes it off the line, and is saved, so a refresh doesn't bring it back.
-  await win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: /^Comments/ }).click();
+  await win.getByRole('navigation', { name: 'Side panels' }).getByRole('button', { name: /^Comments/ }).click();
   await expect(comments).toBeVisible();
   // The panel's card says why its border is yellow: the comment's new line is a best guess.
   await expect(comments.getByText('Best guess', { exact: true })).toBeVisible();
@@ -358,7 +359,7 @@ test('Claude offers a follow-up as buttons under its answer, and a choice sends 
     key,
   );
   // The strip of icons on the right shows the comments or Claude in the panel beside it; the one showing hides it again.
-  const bar = win.getByRole('navigation', { name: 'Comments and Claude' });
+  const bar = win.getByRole('navigation', { name: 'Side panels' });
   const side = win.getByRole('complementary', { name: 'Side panel' });
   const claude = bar.getByRole('button', { name: 'Claude', exact: true });
   if ((await claude.getAttribute('aria-pressed')) !== 'true') await claude.click();
@@ -421,7 +422,7 @@ test('Ask Claude on a review thread: the thread shows over the box, can be remov
     .poll(async () => (await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key))?.exchanges.at(-1), { timeout: 15_000 })
     .toMatchObject({ request: { kind: 'thread', prompt: 'Is this addressed?', thread: { id: 'T_outdated', path: 'src/calc.ts' } }, done: true });
   await expect(panel.getByRole('button', { name: /Thread on calc\.ts/ })).toBeVisible();
-  await win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: /^Comments/ }).click();
+  await win.getByRole('navigation', { name: 'Side panels' }).getByRole('button', { name: /^Comments/ }).click();
 });
 
 test('an agent acts in the app over MCP: marks a file viewed, shows a thread and opens a search', async () => {
@@ -447,7 +448,7 @@ test('an agent acts in the app over MCP: marks a file viewed, shows a thread and
 
 test('the Claude box asks about what you have selected or open in the diff', async () => {
   const key = 'github.com/acme/demo#1';
-  const claudeIcon = win.getByRole('navigation', { name: 'Comments and Claude' }).getByRole('button', { name: 'Claude', exact: true });
+  const claudeIcon = win.getByRole('navigation', { name: 'Side panels' }).getByRole('button', { name: 'Claude', exact: true });
   if ((await claudeIcon.getAttribute('aria-pressed')) !== 'true') await claudeIcon.click();
   const panel = win.getByRole('region', { name: 'Claude' });
   const box = panel.getByRole('textbox', { name: 'Ask Claude' });
@@ -560,7 +561,7 @@ test('with a file open in its own tab, the Claude box asks about that file', asy
   const lastRequest = () => win.evaluate((k) => (globalThis as unknown as { api: Api }).api.claudeView(k), key).then((v) => v?.exchanges.at(-1)?.request);
 
   // ⌘-click in the file tree opens the file in its own tab.
-  const filesIcon = win.getByRole('navigation', { name: 'Files and search' }).getByRole('button', { name: 'Files' });
+  const filesIcon = win.getByRole('navigation', { name: 'Overview, files and commits' }).getByRole('button', { name: 'Files' });
   if ((await filesIcon.getAttribute('aria-pressed')) !== 'true') await filesIcon.click();
   await win.locator('[data-sidebar]').getByText('calc.ts', { exact: true }).first().click({ modifiers: ['Meta'] });
   const fileTab = win.getByRole('tablist', { name: 'Open files' }).getByRole('tab', { name: /calc\.ts/ });
@@ -592,6 +593,77 @@ test('Settings › General lists the repositories found, each with its clone', a
   await expect(found).toContainText(join(fx.root, 'source', 'demo'));
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.send('menu', 'close-tab'));
   await expect(found).toHaveCount(0);
+});
+
+test('the commits take the place of the files, from their icon on the left', async () => {
+  const key = 'github.com/acme/demo#1';
+  const strip = win.getByRole('navigation', { name: 'Overview, files and commits' });
+  const commits = strip.getByRole('button', { name: 'Commits' });
+  const tree = win.locator('[data-sidebar]');
+  const changesAfter = win.getByRole('button', { name: 'Changes after this' });
+
+  // The views are chosen in the strip on the left: the header has no switch.
+  await expect(win.getByRole('group', { name: 'PR views' })).toHaveCount(0);
+  // No count on its icon, for now.
+  await expect(commits).toHaveAccessibleName('Commits');
+  await expect(commits).toHaveText('');
+  await commits.click();
+  await expect(commits).toHaveAttribute('aria-pressed', 'true');
+  await expect(changesAfter.first()).toBeVisible();
+  await expect(tree).toHaveCount(0);
+  // Nothing beside the commits: no comments, no Claude, no details.
+  await expect(win.getByRole('navigation', { name: 'Side panels' })).toHaveCount(0);
+  await expect(win.getByRole('complementary', { name: 'Side panel' })).toHaveCount(0);
+  // Pressed again, back to the files.
+  await commits.click();
+  await expect(tree).toBeVisible();
+  await expect(changesAfter).toHaveCount(0);
+
+  // "Changes after this" shows the files again, compared from that commit.
+  await commits.click();
+  await changesAfter.first().click();
+  await expect(commits).toHaveAttribute('aria-pressed', 'false');
+  await expect(tree).toBeVisible();
+  await expect(win.getByRole('button', { name: /Changes\s*Since [0-9a-f]{7}/ })).toBeVisible({ timeout: 20_000 });
+  await win.evaluate((k) => (globalThis as unknown as { api: Api }).api.setCompare(k, null, 'All changes'), key);
+  await expect(win.getByRole('button', { name: /Changes\s*All changes/ })).toBeVisible({ timeout: 20_000 });
+});
+
+test('the Overview has its details beside it, the files their comments and Claude; Settings at the bottom left', async () => {
+  const left = win.getByRole('navigation', { name: 'Overview, files and commits' });
+  const right = win.getByRole('navigation', { name: 'Side panels' });
+  const tree = win.locator('[data-sidebar]');
+  const details = win.getByRole('region', { name: 'Details' });
+  const comments = win.getByRole('region', { name: 'Comments' });
+
+  // The Overview takes the place of the files, with its buttons in the header and the details beside it.
+  const overview = left.getByRole('button', { name: 'Overview' });
+  if ((await overview.getAttribute('aria-pressed')) !== 'true') await overview.click();
+  await expect(overview).toHaveAttribute('aria-pressed', 'true');
+  await expect(win.getByRole('region', { name: 'Review threads' })).toBeVisible();
+  await expect(tree).toHaveCount(0);
+  await expect(win.getByRole('button', { name: 'Actions', exact: true })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'Reviewers' })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'Checks' })).toBeVisible();
+  // Only the details' icon on the right; it hides and shows them.
+  await expect(right.getByRole('button')).toHaveCount(1);
+  const info = right.getByRole('button', { name: /^Details/ });
+  await info.click();
+  await expect(details).toHaveCount(0);
+  await info.click();
+  await expect(details).toBeVisible();
+
+  // Pressed again, the Overview goes back to the files: the comments and Claude beside them, not the details.
+  await overview.click();
+  await expect(tree).toBeVisible();
+  await expect(details).toHaveCount(0);
+  await expect(right.getByRole('button', { name: /^Details/ })).toHaveCount(0);
+  await expect(right.getByRole('button', { name: /^Comments/ })).toBeVisible();
+  await expect(win.getByRole('button', { name: 'Actions', exact: true })).toHaveCount(0);
+
+  // Settings at the foot of the left strip, no longer in the tab bar.
+  await expect(left.getByRole('button', { name: 'Settings' })).toBeVisible();
+  await expect(win.locator('div.drag').getByRole('button', { name: 'Settings' })).toHaveCount(0);
 });
 
 test('a window reopened from the Dock shows the pull request that was open', async () => {
